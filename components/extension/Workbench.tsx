@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowRight, FolderSearch, RotateCcw } from "lucide-react";
 import { UploadZone, type UploadStatus } from "./UploadZone";
@@ -11,9 +11,9 @@ import { PermissionsCard } from "./PermissionsCard";
 import { FilesCard } from "./FilesCard";
 import { ConfigurationCard } from "./ConfigurationCard";
 import { HealthScore } from "./HealthScore";
+import { RuntimeLaunchCard } from "@/components/tester/RuntimeLaunchCard";
 import { ExtensionLabError } from "@/lib/extension/errors";
 import { validateExtensionFile } from "@/lib/extension/validation";
-import { MAX_EXTENSION_SIZE } from "@/lib/extension/limits";
 import { Button } from "@/components/ui/Button";
 import type { AnalysisStep, ExtensionAnalysis } from "@/types/extension";
 
@@ -25,6 +25,7 @@ export function Workbench() {
   const [fileName, setFileName] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [analysis, setAnalysis] = useState<ExtensionAnalysis | null>(null);
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [step, setStep] = useState<AnalysisStep | null>(null);
   const [ratio, setRatio] = useState(0);
   const reportRef = useRef<HTMLDivElement>(null);
@@ -35,6 +36,7 @@ export function Workbench() {
     setFileName("");
     setErrorMessage("");
     setAnalysis(null);
+    setSourceFile(null);
     setStep(null);
     setRatio(0);
   }, []);
@@ -52,6 +54,7 @@ export function Workbench() {
     }
 
     setFileName(file.name);
+    setSourceFile(file);
     setErrorMessage("");
     setState("uploading");
     setStatus("uploading");
@@ -86,10 +89,6 @@ export function Workbench() {
     }
   }, []);
 
-  const maxSizeLabel = useMemo(
-    () => `${Math.round(MAX_EXTENSION_SIZE / 1024 / 1024)} MB`,
-    [],
-  );
 
   return (
     <div className="space-y-6">
@@ -185,6 +184,7 @@ export function Workbench() {
 
             <div ref={reportRef} className="mt-8 space-y-6">
               <ExtensionSummary analysis={analysis} />
+              <RuntimeLaunchCard analysis={analysis} sourceFile={sourceFile} />
               <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                 <ManifestCard analysis={analysis} />
                 <HealthScore analysis={analysis} />
