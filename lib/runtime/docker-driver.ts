@@ -37,12 +37,13 @@ export class DockerSandboxDriver implements SandboxDriver {
   async create(
     sandboxId: string,
     sourcePath: string,
+    runnerToken: string,
   ): Promise<ContainerHandle> {
     const config = getSandboxConfig();
     const controlPort = await getFreePort();
     const name = `extensionlab-${sandboxId}`;
     const network = config.networkMode === "none" ? "none" : "bridge";
-    const token = `runner_${sandboxId}`;
+    const token = runnerToken;
 
     const args = [
       "create",
@@ -95,6 +96,7 @@ export class DockerSandboxDriver implements SandboxDriver {
       containerId,
       controlPort,
       controlClient: new ControlClient(controlPort),
+      runnerToken,
     };
     const ready = await waitForControl(handle, config.runnerHealthTimeoutMs);
     if (!ready) {

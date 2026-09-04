@@ -8,22 +8,24 @@ export interface ContainerHandle {
   containerId: string;
   controlPort: number;
   controlClient: ControlClient;
+  runnerToken: string;
 }
 
 export interface SandboxDriver {
   readonly name: string;
   available(): Promise<boolean>;
-  create(sandboxId: string, sourcePath: string): Promise<ContainerHandle>;
+  create(sandboxId: string, sourcePath: string, runnerToken: string): Promise<ContainerHandle>;
   remove(handle: ContainerHandle): Promise<void>;
   isRunning(handle: ContainerHandle): Promise<boolean>;
 }
 
-export async function newContainerHandle(): Promise<ContainerHandle> {
+export async function newContainerHandle(runnerToken = ""): Promise<ContainerHandle> {
   const controlPort = await getFreePort();
   return {
     containerId: "",
     controlPort,
     controlClient: new ControlClient(controlPort),
+    runnerToken,
   };
 }
 

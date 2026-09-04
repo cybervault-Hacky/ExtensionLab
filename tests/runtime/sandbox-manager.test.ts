@@ -16,12 +16,13 @@ class FakeDriver implements SandboxDriver {
     return true;
   }
 
-  async create(_sandboxId: string): Promise<ContainerHandle> {
+  async create(_sandboxId: string, _sourcePath: string, runnerToken: string): Promise<ContainerHandle> {
     const control = makeFakeControlClient();
     return {
       containerId: `fake-${_sandboxId}`,
       controlPort: 0,
       controlClient: control as unknown as ControlClient,
+      runnerToken,
     };
   }
 

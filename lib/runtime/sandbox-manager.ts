@@ -130,7 +130,7 @@ export class SandboxManager {
     this.setStatus(snapshot, "creating", "Creating isolated environment");
     let handle: ContainerHandle;
     try {
-      handle = await this.driver.create(snapshot.sandboxId, snapshot.sourcePath);
+      handle = await this.driver.create(snapshot.sandboxId, snapshot.sourcePath, snapshot.token);
     } catch (error) {
       const clean = sanitizeError(error instanceof Error ? error.message : "Docker driver failed.");
       this.setStatus(snapshot, "failed", clean.message);
@@ -145,7 +145,7 @@ export class SandboxManager {
     this.setStatus(snapshot, "loading_extension", "Loading extension in isolated browser");
     const response = await handle.controlClient.command(
       "start",
-      token,
+      handle.runnerToken,
       { testUrl: snapshot.testUrl },
       12000,
     );
@@ -172,7 +172,7 @@ export class SandboxManager {
     this.setStatus(snapshot, "stopping", "Stopping sandbox");
     const handle = this.handles.get(sandboxId);
     if (handle) {
-      await handle.controlClient.command("stop", token, {}, 5000).catch(() => undefined);
+      await handle.controlClient.command("stop", handle.runnerToken, {}, 5000).catch(() => undefined);
     }
 
     await this.destroy(snapshot, "destroyed", "Sandbox destroyed.");
@@ -182,7 +182,7 @@ export class SandboxManager {
   async reload(sandboxId: string, token: string): Promise<SandboxInfo> {
     const snapshot = this.requireSnapshot(sandboxId, token, true);
     const handle = this.requireHandle(sandboxId);
-    await handle.controlClient.command("reload", token, {}, 5000);
+    await handle.controlClient.command("reload", handle.runnerToken, {}, 5000);
     this.emitSandboxEvent(snapshot, "info", "Page reload requested.");
     return this.toPublicInfo(snapshot);
   }
@@ -190,7 +190,7 @@ export class SandboxManager {
   async openUrl(sandboxId: string, token: string, url: string): Promise<SandboxInfo> {
     const snapshot = this.requireSnapshot(sandboxId, token, true);
     const handle = this.requireHandle(sandboxId);
-    await handle.controlClient.command("open-url", token, { url }, 6000);
+    await handle.controlClient.command("open-url", handle.runnerToken, { url }, 6000);
     snapshot.testUrl = url;
     this.emitSandboxEvent(snapshot, "info", `Opened ${url}`);
     return this.toPublicInfo(snapshot);
@@ -199,7 +199,7 @@ export class SandboxManager {
   async restartExtension(sandboxId: string, token: string): Promise<SandboxInfo> {
     const snapshot = this.requireSnapshot(sandboxId, token, true);
     const handle = this.requireHandle(sandboxId);
-    await handle.controlClient.command("restart-extension", token, {}, 6000);
+    await handle.controlClient.command("restart-extension", handle.runnerToken, {}, 6000);
     this.emitSandboxEvent(snapshot, "info", "Extension restart requested.");
     return this.toPublicInfo(snapshot);
   }
@@ -216,7 +216,7 @@ export class SandboxManager {
   async screenshot(sandboxId: string, token: string): Promise<Uint8Array | null> {
     const snapshot = this.requireSnapshot(sandboxId, token, true);
     const handle = this.requireHandle(sandboxId);
-    return handle.controlClient.screenshot(token);
+    return handle.controlClient.screenshot(handle.runnerToken);
   }
 
   getEvents(sandboxId: string, token: string): RuntimeEvent[] {
@@ -280,7 +280,7 @@ export class SandboxManager {
     handle: ContainerHandle,
   ): Promise<void> {
     await handle.controlClient.streamEvents(
-      snapshot.token,
+      handle.runnerToken,
       (event) => this.onRuntimeEvent(snapshot, event),
       () => this.emitSandboxEvent(snapshot, "warning", "Sandbox event stream closed."),
     );
