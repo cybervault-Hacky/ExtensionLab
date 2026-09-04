@@ -1,5 +1,6 @@
 import "server-only";
 import type { RuntimeEvent, SandboxAction } from "@/types/runtime";
+import type { TestAction } from "@/lib/testing/types";
 import { truncate } from "./redact";
 import { cleanRuntimeText } from "./security";
 
@@ -125,6 +126,34 @@ export class ControlClient {
 
     void pump();
     return () => controller.abort();
+  }
+
+  async testAction(
+    token: string,
+    action: TestAction,
+    timeoutMs = 6000,
+  ): Promise<{ ok: boolean; data?: Record<string, unknown>; message?: string }> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const response = await fetch(`${this.baseUrl()}/action`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-sandbox-token": token,
+      },
+      body: JSON.stringify(action),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!response.ok) {
+      return { ok: false, message: "The sandbox runner rejected the test action." };
+    }
+    const result = (await response.json()) as {
+      ok: boolean;
+      data?: Record<string, unknown>;
+      message?: string;
+    };
+    return result;
   }
 
   async screenshot(token: string, timeoutMs = 6000): Promise<Uint8Array | null> {

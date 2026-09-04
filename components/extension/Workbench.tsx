@@ -12,6 +12,7 @@ import { FilesCard } from "./FilesCard";
 import { ConfigurationCard } from "./ConfigurationCard";
 import { HealthScore } from "./HealthScore";
 import { RuntimeLaunchCard } from "@/components/tester/RuntimeLaunchCard";
+import { AutomatedTestLaunchCard } from "@/components/tester/AutomatedTestLaunchCard";
 import { ExtensionLabError } from "@/lib/extension/errors";
 import { validateExtensionFile } from "@/lib/extension/validation";
 import { Button } from "@/components/ui/Button";
@@ -184,7 +185,10 @@ export function Workbench() {
 
             <div ref={reportRef} className="mt-8 space-y-6">
               <ExtensionSummary analysis={analysis} />
-              <RuntimeLaunchCard analysis={analysis} sourceFile={sourceFile} />
+              <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+                <RuntimeLaunchCard analysis={analysis} sourceFile={sourceFile} />
+                <AutomatedTestLaunchCard analysis={analysis} sourceFile={sourceFile} />
+              </div>
               <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                 <ManifestCard analysis={analysis} />
                 <HealthScore analysis={analysis} />

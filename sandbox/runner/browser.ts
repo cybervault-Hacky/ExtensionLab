@@ -136,6 +136,67 @@ export class BrowserRunner {
     return Buffer.from(result.data, "base64");
   }
 
+  async inspectElement(selector: string): Promise<{ exists: boolean; visible: boolean; text?: string }> {
+    if (!this.client) return { exists: false, visible: false };
+    const json = JSON.stringify(selector);
+    const expression = `(() => { try { const el = document.querySelector(${json}); if (!el) return { exists: false, visible: false }; const r = el.getBoundingClientRect(); return { exists: true, visible: (r.width > 0 && r.height > 0) || (el.getClientRects().length > 0), text: (el.textContent || "").slice(0, 500) }; } catch (e) { return { exists: false, visible: false }; } })()`;
+    const result = await this.client.Runtime.evaluate({ expression, returnByValue: true });
+    const value = result.result?.value;
+    if (value && typeof value === "object") {
+      const inspected = value as { exists?: boolean; visible?: boolean; text?: string };
+      return { exists: inspected.exists === true, visible: inspected.visible === true, text: inspected.text };
+    }
+    return { exists: false, visible: false };
+  }
+
+  async inspectText(selector: string): Promise<string> {
+    if (!this.client) return "";
+    const json = JSON.stringify(selector);
+    const expression = `(() => { const el = document.querySelector(${json}); return el ? String((el.textContent || "").slice(0, 2000)) : ""; })()`;
+    const result = await this.client.Runtime.evaluate({ expression, returnByValue: true });
+    return String(result.result?.value ?? "");
+  }
+
+  async click(selector: string): Promise<boolean> {
+    if (!this.client) return false;
+    const json = JSON.stringify(selector);
+    const expression = `(() => { const el = document.querySelector(${json}); if (!el) return false; el.click(); return true; })()`;
+    const result = await this.client.Runtime.evaluate({ expression, returnByValue: true });
+    return result.result?.value === true;
+  }
+
+  async type(selector: string, value: string): Promise<boolean> {
+    if (!this.client) return false;
+    const jsonSelector = JSON.stringify(selector);
+    const jsonValue = JSON.stringify(value);
+    const expression = `(() => { const el = document.querySelector(${jsonSelector}); if (!el) return false; el.value = ${jsonValue}; el.dispatchEvent(new Event("input", { bubbles: true })); el.dispatchEvent(new Event("change", { bubbles: true })); return true; })()`;
+    const result = await this.client.Runtime.evaluate({ expression, returnByValue: true });
+    return result.result?.value === true;
+  }
+
+  async select(selector: string, value: string): Promise<boolean> {
+    if (!this.client) return false;
+    const jsonSelector = JSON.stringify(selector);
+    const jsonValue = JSON.stringify(value);
+    const expression = `(() => { const el = document.querySelector(${jsonSelector}); if (!el) return false; el.value = ${jsonValue}; el.dispatchEvent(new Event("change", { bubbles: true })); return true; })()`;
+    const result = await this.client.Runtime.evaluate({ expression, returnByValue: true });
+    return result.result?.value === true;
+  }
+
+  async scroll(selector: string): Promise<boolean> {
+    if (!this.client) return false;
+    const json = JSON.stringify(selector);
+    const expression = `(() => { const el = document.querySelector(${json}); if (!el) return false; el.scrollIntoView({ block: "center" }); return true; })()`;
+    const result = await this.client.Runtime.evaluate({ expression, returnByValue: true });
+    return result.result?.value === true;
+  }
+
+  async getPageUrl(): Promise<string> {
+    if (!this.client) return "";
+    const result = await this.client.Runtime.evaluate({ expression: "location.href", returnByValue: true });
+    return String(result.result?.value ?? "");
+  }
+
   async stop(): Promise<void> {
     this.started = false;
     try {

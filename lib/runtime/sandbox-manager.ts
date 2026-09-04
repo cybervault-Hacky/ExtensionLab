@@ -16,6 +16,7 @@ import type {
   SandboxSnapshot,
   SandboxStatus,
 } from "@/types/runtime";
+import type { TestAction } from "@/lib/testing/types";
 import type { ContainerHandle, SandboxDriver } from "./driver";
 import { generateReferenceId, generateSandboxId, generateSessionToken } from "./ids";
 
@@ -232,6 +233,16 @@ export class SandboxManager {
   getInfo(sandboxId: string, token: string): SandboxInfo {
     const snapshot = this.requireSnapshot(sandboxId, token);
     return this.toPublicInfo(snapshot);
+  }
+
+  async executeTestAction(
+    sandboxId: string,
+    token: string,
+    action: TestAction,
+  ): Promise<{ ok: boolean; data?: Record<string, unknown>; message?: string }> {
+    const snapshot = this.requireSnapshot(sandboxId, token, true);
+    const handle = this.requireHandle(sandboxId);
+    return handle.controlClient.testAction(handle.runnerToken, action);
   }
 
   subscribe(sandboxId: string, listener: EventListener): () => void {

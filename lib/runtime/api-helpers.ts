@@ -30,6 +30,20 @@ export async function validateIncomingTestUrl(
 }
 
 export function errorResponse(error: unknown): NextResponse {
+  const structured = error as { code?: string; referenceId?: string; message?: string };
+  if (structured && typeof structured === "object" && structured.code && structured.message) {
+    return NextResponse.json(
+      {
+        error: {
+          code: structured.code,
+          message: structured.message,
+          referenceId: structured.referenceId ?? "ERR-RUNTIME",
+        },
+      },
+      { status: 409 },
+    );
+  }
+
   if (error instanceof SandboxRuntimeError) {
     return NextResponse.json(
       {

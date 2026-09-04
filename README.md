@@ -209,6 +209,88 @@ it will:
 - **Later phases (planned):** User accounts, saved reports, team
   collaboration, cloud test history, and AI-assisted analysis.
 
+## Phase 4: Automated Testing & Runtime Diagnostics
+
+Phase 4 adds a deterministic automated testing engine on top of the Phase 3
+isolated sandbox.
+
+```text
+Static Analysis → Sandbox → Chromium → Predefined Test Actions → Runtime Evidence
+→ Assertions → Deterministic Score → Diagnostics → Automated Report
+```
+
+### Test engine architecture
+
+- `lib/testing/types.ts` — typed test, assertion, result, run, and diagnostic models
+- `lib/testing/registry.ts` — deterministic built-in suites and static-analysis-driven discovery
+- `lib/testing/assertions.ts` — deterministic assertion engine
+- `lib/testing/selectors.ts` — safe selector policy
+- `lib/testing/scoring.ts` — deterministic scoring
+- `lib/testing/diagnostics.ts` — findings, JSON export, copy summary
+- `lib/testing/test-runner.ts` — run lifecycle, cancellation, timeout, cleanup, real-time events
+- `app/api/tests/*` — create/start/status/results/events/stream/stop endpoints
+
+### Supported test actions
+
+Only predefined browser actions are exposed. There is no arbitrary JavaScript,
+no `eval`, no `executeScript`, no shell, and no raw CDP command endpoint.
+
+`open_url`, `reload_page`, `wait`, `click`, `type`, `select`, `scroll`,
+`inspect_text`, `inspect_element`, `open_popup`, `clear_console`,
+`capture_screenshot`.
+
+### Supported assertions
+
+`element_exists`, `element_visible`, `text_contains`, `url_equals`,
+`url_contains`, `console_contains`, `console_not_contains`,
+`network_request_seen`, `network_status_equals`, `extension_loaded`,
+`content_script_detected`, `service_worker_detected`, `popup_available`,
+`runtime_error_none`, `network_4xx_none`, `network_5xx_none`.
+
+### Built-in suites
+
+- **Core Extension Suite** — extension loading, page loading, service worker,
+  popup availability, console stability, and network behavior
+- **Advanced Diagnostics Suite** — content scripts and broad permission review
+
+Tests that are not applicable are skipped with an explicit reason. A skipped
+test is never counted as a pass or a failure.
+
+### Security model
+
+- Preserves every Phase 3 boundary: fresh disposable container, no privileges,
+  no Docker socket, no host mounts, no host network, no secrets, resource and
+  event limits.
+- Selector and URL values are validated; sensitive query parameters, cookies,
+  and authorization headers remain redacted.
+- Automated runs use their own per-session token and non-guessable `run_` IDs.
+- Test commands can only be one of the predefined safe actions above.
+
+### Scoring
+
+- `passed = 100`, `warning = 50`, `failed/timeout/error = 0`, `skipped = excluded`.
+- Scores are deterministic and documented in the generated report.
+- Category scores only include applicable tests.
+
+### Runtime requirements
+
+Automated tests require Docker-capable infrastructure with the sandbox image:
+
+```bash
+docker build -f sandbox/Dockerfile -t extensionlab-sandbox:local .
+```
+
+The frontend can be hosted separately.
+
+### Known limitations
+
+- Some browser extension APIs are not observable through Chromium/CDP.
+- Popup interaction may require browser-specific handling; the runner reports
+  it as unavailable rather than faking a successful test.
+- MV3 service workers are event-driven and may be transiently idle; idle state
+  is not reported as an error.
+- Source locations can only be reported when the runtime emits them.
+
 ## Phase 3: Isolated Browser Sandbox & Runtime Testing
 
 Phase 3 adds real browser execution inside a fresh, disposable container.
