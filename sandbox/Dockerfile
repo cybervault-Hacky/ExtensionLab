@@ -14,15 +14,17 @@ RUN apt-get update \
      ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app/runner
-COPY sandbox/package.json ./
+WORKDIR /app
+COPY sandbox/package.json ./runner/package.json
 COPY sandbox/runner ./runner
-COPY sandbox/tsconfig.json sandbox/tsconfig.build.json ../
+COPY sandbox/tsconfig.json ./tsconfig.json
+COPY sandbox/tsconfig.build.json ./tsconfig.build.json
 
-RUN npm install --no-audit --no-fund
+RUN cd runner && npm install --no-audit --no-fund
 RUN npm run build
 
 USER node
+WORKDIR /app
 
 EXPOSE 9333
 

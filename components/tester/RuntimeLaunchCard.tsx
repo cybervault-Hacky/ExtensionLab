@@ -54,6 +54,11 @@ export function RuntimeLaunchCard({
         const body = (await startResponse.json().catch(() => null)) as {
           error?: { message?: string };
         } | null;
+        await fetch(`/api/sandbox/${created.sandboxId}/stop`, {
+          method: "POST",
+          headers: { "x-sandbox-token": created.sessionToken },
+        }).catch(() => undefined);
+        window.sessionStorage.removeItem("extensionlab:sandbox-token");
         setError(body?.error?.message ?? "The isolated browser could not be started.");
         return;
       }
