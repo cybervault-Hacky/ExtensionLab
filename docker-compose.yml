@@ -1,0 +1,28 @@
+services:
+  sandbox-image:
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile
+    image: extensionlab-sandbox:local
+    profiles: ["run-once"]
+    command: ["true"]
+
+  web:
+    build: .
+    command: npm run dev
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      SANDBOX_IMAGE: extensionlab-sandbox:local
+      SANDBOX_MAX_RUNTIME: "120"
+      SANDBOX_MEMORY_LIMIT: "768m"
+      SANDBOX_CPU_LIMIT: "0.5"
+      SANDBOX_MAX_CONCURRENT: "2"
+      SANDBOX_NETWORK_MODE: restricted
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - sandbox-image

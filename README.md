@@ -1,1 +1,534 @@
 # ExtensionLab
+
+> Test your browser extensions.
+
+ExtensionLab is a premium browser-extension inspection and testing platform.
+Phase 1 provides a polished web experience for uploading a browser extension
+ZIP package and inspecting it locally in the browser.
+
+**Phase 1 does not execute extensions.** It performs:
+
+```text
+UPLOAD → EXTRACT → INSPECT → ANALYZE → REPORT
+```
+
+Uploaded JavaScript, HTML and other files are treated as untrusted data. They
+are never executed, installed, dynamically imported, or injected into the UI.
+
+## Phase 1 scope
+
+- Premium, minimal, responsive user interface
+- Light and dark themes with a user-selectable accent colour
+- ZIP upload with drag-and-drop and file picker support
+- Client-side file validation and size limits
+- Local package inspection using `JSZip`
+- Manifest detection, including nested top-level folder packages
+- Manifest version and standard-field analysis
+- Permission and host-permission overview
+- File structure browsing
+- Basic configuration checks and missing referenced-file detection
+- Transparent health score based on implemented checks
+- Accessible, keyboard-friendly controls
+
+Phase 1 intentionally does **not** include browser sandboxing, real extension
+execution, network monitoring, live console capture, automated browser tests,
+user accounts, payments, AI analysis, or cloud test history.
+
+## Requirements
+
+- Node.js 20 or newer (Node 22 is tested)
+- npm 10 or newer
+
+## Installation
+
+```bash
+npm install
+```
+
+## Development
+
+```bash
+npm run dev
+```
+
+Open the printed local URL. The preview environment binds to all interfaces
+so the app can be reached through the hosted preview.
+
+## Build
+
+```bash
+npm run build
+```
+
+The build fails on TypeScript errors, lint errors, test failures, or
+production-build errors.
+
+## Start production
+
+```bash
+npm run start
+```
+
+## Lint
+
+```bash
+npm run lint
+```
+
+## Typecheck
+
+```bash
+npm run typecheck
+```
+
+## Test
+
+```bash
+npm run test
+```
+
+The test suite covers:
+
+- Valid manifest V3
+- Valid manifest V2 with informational compatibility warning
+- Missing manifest
+- Invalid manifest JSON
+- Missing referenced service worker
+- Permission detection
+- Host-permission extraction and broad-access review
+- Nested ZIP manifest detection
+- Oversized-file rejection
+- Unsupported-file rejection
+- Corrupted ZIP graceful error
+
+## Repository architecture
+
+```text
+app/
+  page.tsx                 Landing page
+  layout.tsx               Root layout and theme bootstrap
+  globals.css              Design tokens
+  dashboard/page.tsx       Extension analysis dashboard
+components/
+  layout/                  Navbar, Footer, Logo
+  landing/                 Hero, HowItWorks, Features, UploadSection, CTA
+  extension/               UploadZone, Workbench, dashboard cards
+  settings/                Theme and accent selectors
+  settings/ThemeProvider   Theme + accent context
+  ui/                      Button, Card, Badge, Modal, Progress
+lib/
+  extension/analyzer.ts    ZIP processing and report orchestration
+  extension/manifest.ts    Manifest parsing and feature detection
+  extension/permissions.ts Permission analysis
+  extension/validation.ts  File acceptance rules
+  extension/limits.ts      Configurable safety limits
+  theme/theme.ts           Theme and accent persistence
+tests/                     Analyzer unit tests
+types/extension.ts         Typed analysis result model
+```
+
+The analysis logic is independent from React. The UI calls the typed
+analyzer and renders the result.
+
+## Architecture flow
+
+```text
+UI
+ ↓
+analyzer.ts
+ ↓
+manifest parser
+ ↓
+permission analyzer
+ ↓
+file analyzer
+ ↓
+health scorer
+ ↓
+typed result
+ ↓
+UI
+```
+
+## Security considerations
+
+- The extension ZIP is parsed **without executing any contained code.**
+- Uploaded HTML is never rendered directly in the application.
+- Uploaded file names are sanitized and displayed as text only.
+- A 25 MB uploaded-file limit is enforced before reading.
+- A maximum file count is enforced during extraction.
+- A total uncompressed-size limit guards against zip bombs.
+- A per-file uncompressed-size limit is enforced.
+- `manifest.json` is limited to 512 KB before parsing.
+- Malformed and corrupted ZIPs fail with a developer-friendly message rather
+  than a raw stack trace.
+- No secrets or API keys are required by Phase 1.
+
+The limits are configurable constants in
+`lib/extension/limits.ts`.
+
+```ts
+export const MAX_EXTENSION_SIZE = 25 * 1024 * 1024;
+export const MAX_FILE_COUNT = 800;
+export const MAX_TOTAL_UNCOMPRESSED_SIZE = 120 * 1024 * 1024;
+export const MAX_SINGLE_FILE_SIZE = 25 * 1024 * 1024;
+export const MAX_MANIFEST_SIZE = 512 * 1024;
+```
+
+## Database
+
+Phase 5 uses a relational SQLite database for local development and the data
+layer is designed so business logic can move to PostgreSQL later.
+
+```bash
+npm run db:migrate
+```
+
+The migration runner applies every SQL file in `lib/db/migrations/` in order.
+The app also runs pending migrations lazily on first database access, so
+`npm run dev` is sufficient for local work.
+
+The database file defaults to `data/extensionlab.sqlite` and can be overridden
+with `EXTENSIONLAB_DB_PATH` or `DATABASE_PATH`.
+
+## Deployment
+
+Phase 5 is a server-rendered Next.js application and cannot run as a fully
+static export because it requires cookies, server-side sessions, and a
+persistent database.
+
+```bash
+npm run build
+npm run start
+```
+
+Deploy `npm run start` behind any Node-compatible host that provides a
+persistent writable filesystem, or point `EXTENSIONLAB_DB_PATH` at a managed
+volume. Reports, test runs, auth cookies, and account data require a real
+server.
+
+## GitHub Actions
+
+The repository includes `.github/workflows/ci.yml`. On push and pull requests
+it will:
+
+1. Install dependencies
+2. Run lint
+3. Run typecheck
+4. Run tests
+5. Run the production build
+
+## Roadmap
+
+- **Phase 1 (implemented):** Premium UI, ZIP upload, local package inspection,
+  manifest analysis, permission overview, file structure, configuration checks,
+  health score.
+- **Phase 2 (existing project):** Advanced manifest analysis, permission
+  intelligence, reference resolution, and detailed findings are preserved.
+- **Phase 3 (implemented):** Real browser extension execution inside an isolated
+  Chromium container with runtime events, console/network capture, and cleanup.
+- **Phase 4 (implemented):** Deterministic automated test engine, scores,
+  diagnostics, and live SSE progress inside the sandbox.
+- **Phase 5 (current):** Accounts, persistent extension projects, analysis
+  snapshots, test history, immutable reports, comparison, secure sharing,
+  usage limits, settings, and account deletion.
+- **Later phases (planned):** Team collaboration, cloud managed history, and
+  AI-assisted analysis.
+
+## Phase 4: Automated Testing & Runtime Diagnostics
+
+Phase 4 adds a deterministic automated testing engine on top of the Phase 3
+isolated sandbox.
+
+```text
+Static Analysis → Sandbox → Chromium → Predefined Test Actions → Runtime Evidence
+→ Assertions → Deterministic Score → Diagnostics → Automated Report
+```
+
+### Test engine architecture
+
+- `lib/testing/types.ts` — typed test, assertion, result, run, and diagnostic models
+- `lib/testing/registry.ts` — deterministic built-in suites and static-analysis-driven discovery
+- `lib/testing/assertions.ts` — deterministic assertion engine
+- `lib/testing/selectors.ts` — safe selector policy
+- `lib/testing/scoring.ts` — deterministic scoring
+- `lib/testing/diagnostics.ts` — findings, JSON export, copy summary
+- `lib/testing/test-runner.ts` — run lifecycle, cancellation, timeout, cleanup, real-time events
+- `app/api/tests/*` — create/start/status/results/events/stream/stop endpoints
+
+### Supported test actions
+
+Only predefined browser actions are exposed. There is no arbitrary JavaScript,
+no `eval`, no `executeScript`, no shell, and no raw CDP command endpoint.
+
+`open_url`, `reload_page`, `wait`, `click`, `type`, `select`, `scroll`,
+`inspect_text`, `inspect_element`, `open_popup`, `clear_console`,
+`capture_screenshot`.
+
+### Supported assertions
+
+`element_exists`, `element_visible`, `text_contains`, `url_equals`,
+`url_contains`, `console_contains`, `console_not_contains`,
+`network_request_seen`, `network_status_equals`, `extension_loaded`,
+`content_script_detected`, `service_worker_detected`, `popup_available`,
+`runtime_error_none`, `network_4xx_none`, `network_5xx_none`.
+
+### Built-in suites
+
+- **Core Extension Suite** — extension loading, page loading, service worker,
+  popup availability, console stability, and network behavior
+- **Advanced Diagnostics Suite** — content scripts and broad permission review
+
+Tests that are not applicable are skipped with an explicit reason. A skipped
+test is never counted as a pass or a failure.
+
+### Security model
+
+- Preserves every Phase 3 boundary: fresh disposable container, no privileges,
+  no Docker socket, no host mounts, no host network, no secrets, resource and
+  event limits.
+- Selector and URL values are validated; sensitive query parameters, cookies,
+  and authorization headers remain redacted.
+- Automated runs use their own per-session token and non-guessable `run_` IDs.
+- Test commands can only be one of the predefined safe actions above.
+
+### Scoring
+
+- `passed = 100`, `warning = 50`, `failed/timeout/error = 0`, `skipped = excluded`.
+- Scores are deterministic and documented in the generated report.
+- Category scores only include applicable tests.
+
+### Runtime requirements
+
+Automated tests require Docker-capable infrastructure with the sandbox image:
+
+```bash
+docker build -f sandbox/Dockerfile -t extensionlab-sandbox:local .
+```
+
+The frontend can be hosted separately.
+
+### Known limitations
+
+- Some browser extension APIs are not observable through Chromium/CDP.
+- Popup interaction may require browser-specific handling; the runner reports
+  it as unavailable rather than faking a successful test.
+- MV3 service workers are event-driven and may be transiently idle; idle state
+  is not reported as an error.
+- Source locations can only be reported when the runtime emits them.
+
+## Phase 3: Isolated Browser Sandbox & Runtime Testing
+
+Phase 3 adds real browser execution inside a fresh, disposable container.
+
+```text
+STATIC ANALYSIS → ISOLATED CHROMIUM → REAL EXTENSION EXECUTION → RUNTIME EVENTS → CLEANUP
+```
+
+The host application never executes extension code directly. Each test gets a
+new non-privileged Docker container with:
+
+- Non-root `node` user
+- Dropped Linux capabilities (`--cap-drop ALL`)
+- Read-only root filesystem with writable tmpfs
+- `no-new-privileges`, `--init`, and a process-count limit
+- Hard memory, CPU, runtime, file-count, and event limits
+- No Docker socket, no host mounts, no host PID namespace, and no privileged mode
+- Restricted network access with a configurable `none` mode for maximum isolation
+- Short-lived control port published only to `127.0.0.1`
+
+The uploaded package is copied into the sandbox, then Chromium is started with
+`--load-extension` pointing at that package. The browser runs under `xvfb`
+because extension rendering requires a non-headless window.
+
+### Runtime workflow
+
+1. Static analysis (Phase 1/2) completes.
+2. The frontend uploads the package to `POST /api/sandbox/create`.
+3. The API extracts the package into a private temporary directory.
+4. `SandboxManager` creates a disposable container and starts the runner.
+5. The runner starts Chromium and loads the unpacked extension.
+6. The runner opens the default ExtensionLab test page or a validated public URL.
+7. Runtime console, network, page, extension, and error events stream back.
+8. The tester UI shows a live browser screenshot and runtime panels.
+9. Stopping the sandbox terminates the browser, destroys the container, and
+   deletes temporary extension and log data.
+
+### Sandbox API
+
+```text
+POST  /api/sandbox/create                     create a session (multipart: file, testUrl)
+GET   /api/sandbox/:id/status               sandbox state
+POST  /api/sandbox/:id/start                start container + browser
+POST  /api/sandbox/:id/stop                 stop + destroy
+POST  /api/sandbox/:id/reload               reload the test page
+POST  /api/sandbox/:id/extension/restart    restart extension session
+POST  /api/sandbox/:id/console/clear        clear runtime console
+POST  /api/sandbox/:id/open-url             open a validated public URL
+GET   /api/sandbox/:id/events               runtime events
+GET   /api/sandbox/:id/events/stream        SSE real-time event stream
+GET   /api/sandbox/:id/network              network entries
+GET   /api/sandbox/:id/screenshot           current live browser frame
+```
+
+Every request requires the per-session token from `POST /api/sandbox/create`.
+Container IDs and temporary paths are never exposed to clients.
+
+### Runtime tester UI
+
+`/dashboard/test` provides:
+
+- Browser viewport with live sandbox screenshots
+- Console, Network, Extension, and Events tabs
+- Reload, Restart Extension, Clear Console, and Stop Sandbox controls
+- Real backend state only; no simulated runtime results
+
+### Runtime security policy
+
+- Public HTTPS URLs only by default (`http:` is opt-in).
+- Loopback, link-local, private RFC1918, IPv6 private, and metadata ranges are blocked.
+- DNS resolution is checked server-side before opening a URL.
+- Sensitive query parameters, cookies, and authorization headers are redacted.
+- Runtime events, logs, network data, extension source, and containers are temporary.
+- On failure the API returns a sanitized `referenceId`; internal paths and stack
+  traces are never returned.
+
+### Phase 3 configuration (`.env.example`)
+
+```ini
+SANDBOX_IMAGE=extensionlab-sandbox:local
+SANDBOX_MAX_RUNTIME=120
+SANDBOX_MEMORY_LIMIT=768m
+SANDBOX_CPU_LIMIT=0.5
+SANDBOX_MAX_CONCURRENT=2
+SANDBOX_MAX_PER_WINDOW=4
+SANDBOX_RATE_LIMIT_WINDOW_MS=60000
+SANDBOX_NETWORK_MODE=restricted
+SANDBOX_MAX_EVENTS=500
+SANDBOX_MAX_EVENT_SIZE=8192
+SANDBOX_MAX_LOG_LENGTH=2000
+SANDBOX_MAX_NETWORK_EVENTS=200
+SANDBOX_ALLOW_HTTP=false
+```
+
+### Sandbox image
+
+```bash
+docker build -f sandbox/Dockerfile -t extensionlab-sandbox:local .
+```
+
+The container image is intentionally minimal: Node, Chromium, Xvfb, and font
+packages. The runner source lives in `sandbox/runner/` and has its own
+`package.json` and strict TypeScript build.
+
+### Local development
+
+Install Docker and Docker Compose, then:
+
+```bash
+cp .env.example .env.local
+npm install
+docker build -f sandbox/Dockerfile -t extensionlab-sandbox:local .
+npm run dev
+```
+
+Launching a sandbox requires a Docker-capable host. GitHub Pages alone cannot
+execute sandbox tests.
+
+### Phase 3 automated tests
+
+- `tests/runtime/urls.test.ts` — safe URL policy and DNS/network blocking rules
+- `tests/runtime/redact.test.ts` — sensitive data redaction
+- `tests/runtime/events.test.ts` — event and log limits
+- `tests/runtime/sandbox-manager.test.ts` — state machine, capacity limits,
+  rate limits, cleanup, and timeout behavior with a test driver
+
+Docker integration tests are intentionally separated because they require a
+container runtime. They should run in an environment with Docker installed and
+the `extensionlab-sandbox:local` image built.
+
+### Phase 3 test matrix
+
+```text
+Upload → Static Analysis → Sandbox Creation → Browser Start → Extension Load
+→ Test Page → Runtime Events → Stop → Cleanup
+```
+
+Each stage is independently validated by the manager/runner architecture and
+the unit tests above.
+
+
+## Phase 5: Persistent Workspace, Accounts & Reports
+
+Phase 5 turns ExtensionLab into a real SaaS workspace without rewriting the
+analyzer, sandbox, or test engine.
+
+```text
+Account → Upload Extension → Static Analysis → Save Project → Run Tests
+→ Persistent Test Result → Immutable Report → Compare → Share
+```
+
+### Authentication & sessions
+
+- Email + password authentication with normalized, case-insensitive emails.
+- Passwords are stored as salted `scrypt` hashes; passwords are never stored
+  in plaintext.
+- HttpOnly, SameSite=Lax server-side database sessions with random
+  non-guessable token hashes.
+- Secure cookie flag in production, session expiry, logout invalidation,
+  logout-all-sessions, and origin checks for state-changing APIs.
+- Generic sign-in and password-reset messages avoid account enumeration.
+- Password reset tokens are random, hashed, expire after 30 minutes, and are
+  single-use.
+
+### Persistence & data model
+
+- `users`, `sessions`, `password_resets`, `extensions`,
+  `analysis_snapshots`, `test_runs`, `reports`, `shares`, `audit_events`, and
+  `usage_events`.
+- Every project, test run, report, and share is owned by a user. Ownership is
+  enforced in every repository query; the frontend route is never used for
+  authorization.
+- Analysis snapshots are immutable. Reports reference a specific snapshot and
+  test run and never rebuild from the latest extension state.
+- Account deletion is transactional and removes owned projects, snapshots,
+  test runs, reports, and share rows.
+
+### Product features
+
+- `/login`, `/signup`, `/forgot-password`, `/reset-password`
+- `/dashboard`, `/dashboard/analyze`, `/dashboard/extensions[/id]`
+- `/dashboard/tests[/runId]`, `/dashboard/reports[/id]`, `/dashboard/reports/compare`
+- `/dashboard/settings`, `/dashboard/profile`
+- `/report/shared/[token]` — public-safe summarized report only; never exposes
+  email, credentials, sessions, private source, runtime secrets, host paths, or
+  container internals.
+- Usage limits are configuration-driven from the free plan
+  (`PLAN_ANALYSIS_LIMIT`, `PLAN_TEST_LIMIT`, `PLAN_MAX_EXTENSION_SIZE`,
+  `PLAN_MAX_CONCURRENT_RUNS`, `PLAN_HISTORY_RETENTION_DAYS`). Failed sandbox
+  starts do not consume a test-run quota.
+
+### Security notes
+
+- Existing Phase 1-4 security boundaries are preserved. The user session is
+  never passed into the sandbox.
+- Redaction of authorization headers, cookies, passwords, tokens, secrets,
+  api keys, and sensitive query parameters continues.
+- Public reports render a safe projection with text rendering only.
+- Share tokens are cryptographically random, revocable, and optionally
+  expiring.
+
+### Known limitations
+
+- Email delivery is not wired to an external provider in this phase; in local
+  development, `EXTENSIONLAB_RESET_DEV_DIR` can be used to receive reset tokens
+  without exposing them in logs. Production should be configured with an email
+  provider.
+- Extension ZIP files are not stored permanently. Re-running automated tests
+  requires the owner to re-upload the original package.
+- Real container/Chromium E2E still requires Docker-capable infrastructure.
+
+## License
+
+Not yet specified. The repository is currently configured for private or
+internal use.
