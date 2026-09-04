@@ -21,10 +21,11 @@ export function ExtensionPanel({
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatusCard label="Extension" state={extension?.extensionState ?? "detected"} detail={extension?.message ?? "Unpacked extension"} />
         <StatusCard label="Service Worker" state={extension?.serviceWorkerState ?? "detected"} detail={extension?.serviceWorkerFile ?? "Momentary state"} />
         <StatusCard label="Content Scripts" state={extension?.contentScriptsState ?? "detected"} detail="Observed via manifest / runtime events" />
+        <StatusCard label="Popup" state={extension?.popupState ?? "detected"} detail={extension?.popupPath ?? "Action-defined extension"} />
       </div>
 
       <div>
