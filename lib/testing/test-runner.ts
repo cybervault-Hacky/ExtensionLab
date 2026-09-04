@@ -38,17 +38,13 @@ export interface TestRunCreateInput {
 
 interface ManagedRun {
   snap: TestRunSnapshot;
-  startPromise: Promise<void>;
   listeners: EventEmitter;
 }
-
-type RunEvent = "created" | "started" | "test-update" | "completed" | "failed" | "stopped";
 
 export class TestRunManager {
   private readonly runs = new Map<string, ManagedRun>();
   private readonly ipCounts = new Map<string, { count: number; resetAt: number }>();
   private readonly sandboxManager: SandboxManager;
-  private readonly startPromiseByRun = new Map<string, Promise<void>>();
 
   constructor(sandboxManager: SandboxManager) {
     this.sandboxManager = sandboxManager;
@@ -83,11 +79,7 @@ export class TestRunManager {
     snap.events.push(JSON.stringify({ type: "test-run", state: "created", runId, timestamp: Date.now() }));
 
     const listener = new EventEmitter();
-    const startPromise = new Promise<void>((resolve) => {
-      this.startPromiseByRun.set(runId, Promise.resolve());
-      resolve();
-    });
-    this.runs.set(runId, { snap, startPromise, listeners: listener });
+    this.runs.set(runId, { snap, listeners: listener });
     this.recordIp(input.clientIp);
 
     return { runId, token };
