@@ -54,6 +54,8 @@ function hostnameIsLiteralPrivate(hostname: string): boolean {
   return false;
 }
 
+export { isPrivateIPv4, isPrivateIPv6, hostnameIsLiteralPrivate };
+
 export interface UrlValidationResult {
   ok: boolean;
   url?: string;

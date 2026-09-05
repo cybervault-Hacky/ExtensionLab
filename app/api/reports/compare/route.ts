@@ -12,6 +12,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const user = requireApiUser(request);
     const url = new URL(request.url);
+
+    // Phase 9: cross-browser comparison of one matrix run's per-browser results.
+    const matrixId = url.searchParams.get("matrix");
+    if (matrixId) {
+      if (!isSafeId(matrixId)) throw badRequest("A valid matrix run id is required.");
+      const { getMatrixRunView } = await import("@/lib/testing/matrix-service");
+      const view = getMatrixRunView(user.id, matrixId);
+      if (!view) throw badRequest("A matrix run owned by your account is required.");
+      return NextResponse.json({ mode: "cross-browser", matrix: view });
+    }
+
     const a = url.searchParams.get("a");
     const b = url.searchParams.get("b");
     if (!a || !b || !isSafeId(a) || !isSafeId(b)) {

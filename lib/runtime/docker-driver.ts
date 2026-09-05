@@ -2,9 +2,11 @@ import "server-only";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { getSandboxConfig } from "./config";
+import { getBrowserRegistryConfig } from "@/lib/browsers/registry";
+import { isBrowserId, type BrowserId } from "@/lib/browsers/types";
 import { getFreePort } from "./ports";
 import { ControlClient } from "./control-client";
-import { waitForControl, type ContainerHandle, type SandboxDriver } from "./driver";
+import { waitForControl, type ContainerHandle, type CreateSandboxOptions, type SandboxDriver } from "./driver";
 
 const execFileAsync = promisify(execFile);
 
@@ -14,6 +16,12 @@ const execFileAsync = promisify(execFile);
  * The host process never runs extension code directly. It only manages a
  * fresh, non-privileged, read-only-root container with a loopback-only control
  * port. The extension source is copied into the container's disposable tmpfs.
+ *
+ * Phase 9: each browser runtime has its own pinned image; the security profile
+ * (cap-drop ALL, no-new-privileges, read-only root, tmpfs, CPU/memory/PID
+ * limits, no privileged, no host network, no docker socket) is identical for
+ * every browser — Firefox and Edge receive exactly the same hardening as
+ * Chromium.
  */
 export class DockerSandboxDriver implements SandboxDriver {
   readonly name = "docker";
@@ -38,8 +46,11 @@ export class DockerSandboxDriver implements SandboxDriver {
     sandboxId: string,
     sourcePath: string,
     runnerToken: string,
+    options?: CreateSandboxOptions,
   ): Promise<ContainerHandle> {
     const config = getSandboxConfig();
+    const browserId: BrowserId = isBrowserId(options?.browserId) ? options!.browserId! : "chromium";
+    const image = this.imageForBrowser(browserId);
     const controlPort = await getFreePort();
     const name = `extensionlab-${sandboxId}`;
     const network = config.networkMode === "none" ? "none" : "bridge";
@@ -79,7 +90,9 @@ export class DockerSandboxDriver implements SandboxDriver {
       `RUNNER_TOKEN=${token}`,
       "-e",
       "SANDBOX_ID=" + sandboxId,
-      this.image,
+      "-e",
+      `EXTENSIONLAB_BROWSER=${browserId}`,
+      image,
     ];
 
     const created = await this.run(args);
@@ -97,6 +110,7 @@ export class DockerSandboxDriver implements SandboxDriver {
       controlPort,
       controlClient: new ControlClient(controlPort),
       runnerToken,
+      browserId,
     };
     const ready = await waitForControl(handle, config.runnerHealthTimeoutMs);
     if (!ready) {
@@ -128,6 +142,15 @@ export class DockerSandboxDriver implements SandboxDriver {
     } catch {
       return false;
     }
+  }
+
+  /** Server-internal: pinned image for a browser runtime. */
+  private imageForBrowser(browserId: BrowserId): string {
+    if (browserId === "chromium" && !process.env.SANDBOX_IMAGE_CHROMIUM) {
+      // Chromium keeps the legacy single-image configuration untouched.
+      return this.image;
+    }
+    return getBrowserRegistryConfig().images[browserId];
   }
 
   private run(args: string[]): Promise<{ stdout: string; stderr: string }> {

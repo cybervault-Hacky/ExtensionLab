@@ -16,6 +16,8 @@ export const JOB_TYPES = [
   "REPORT_GENERATION",
   "ARTIFACT_CLEANUP",
   "EMAIL",
+  "WEBHOOK_DELIVERY",
+  "ORG_EXPORT",
 ] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
@@ -41,6 +43,7 @@ export function insertJob(input: {
   id?: string;
   type: JobType;
   userId: string | null;
+  organizationId?: string | null;
   payload: Record<string, unknown>;
   maxAttempts: number;
   priority?: number;
@@ -54,13 +57,14 @@ export function insertJob(input: {
   const id = input.id ?? generateDbId("job");
   db.prepare(
     `INSERT INTO jobs
-      (id, type, user_id, status, priority, attempts, max_attempts, payload_json, idempotency_key,
+      (id, type, user_id, organization_id, status, priority, attempts, max_attempts, payload_json, idempotency_key,
        resource_type, resource_id, run_after, created_at, updated_at)
-     VALUES (?, ?, ?, 'queued', ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, 'queued', ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.type,
     input.userId,
+    input.organizationId ?? null,
     input.priority ?? 0,
     Math.max(1, input.maxAttempts),
     JSON.stringify(input.payload ?? {}),
@@ -72,6 +76,22 @@ export function insertJob(input: {
     now,
   );
   return getJobById(id)!;
+}
+
+/** Running-job counts per organization (fair scheduling, Phase 10). */
+export function countRunningJobsForOrganization(organizationId: string): number {
+  const row = getDb()
+    .prepare("SELECT COUNT(*) AS n FROM jobs WHERE organization_id = ? AND status = 'running'")
+    .get(organizationId) as { n: number };
+  return Number(row.n);
+}
+
+/** Active (queued/running/retrying) counts per organization. */
+export function countActiveJobsForOrganization(organizationId: string): number {
+  const row = getDb()
+    .prepare("SELECT COUNT(*) AS n FROM jobs WHERE organization_id = ? AND status IN ('queued','running','retrying')")
+    .get(organizationId) as { n: number };
+  return Number(row.n);
 }
 
 export function getJobById(id: string): JobRow | null {
@@ -167,6 +187,10 @@ export function claimNextJob(input: {
   types: readonly JobType[];
   leaseMs: number;
   excludeUserIds?: string[];
+  /** Phase 10 fairness: max simultaneously running jobs per organization. */
+  orgConcurrency?: (organizationId: string) => number;
+  /** How many queued candidates to examine for fairness (bounded scan). */
+  scanLimit?: number;
 }): JobRow | null {
   if (input.types.length === 0) return null;
   const db = getDb();
@@ -174,19 +198,21 @@ export function claimNextJob(input: {
   const typePlaceholders = input.types.map(() => "?").join(",");
   const exclude = input.excludeUserIds ?? [];
   const excludeSql = exclude.length > 0 ? `AND (user_id IS NULL OR user_id NOT IN (${exclude.map(() => "?").join(",")}))` : "";
+  const scanLimit = Math.min(Math.max(input.scanLimit ?? 50, 1), 500);
 
   return transaction(db, () => {
-    const candidate = db
+    const candidates = db
       .prepare(
-        `SELECT id FROM jobs
+        `SELECT id, organization_id FROM jobs
          WHERE status IN ('queued','retrying')
            AND run_after <= ?
            AND type IN (${typePlaceholders})
            ${excludeSql}
          ORDER BY priority DESC, run_after ASC, created_at ASC
-         LIMIT 1`,
+         LIMIT ?`,
       )
-      .get(now, ...input.types, ...exclude) as { id: string } | undefined;
+      .all(now, ...input.types, ...exclude, scanLimit) as Array<{ id: string; organization_id: string | null }>;
+    const candidate = pickFairCandidate(db, candidates, input.orgConcurrency);
     if (!candidate) return null;
     const rows = db
       .prepare(
@@ -199,6 +225,32 @@ export function claimNextJob(input: {
       .all(input.workerId, now + input.leaseMs, now, now, candidate.id) as unknown as JobRow[];
     return rows[0] ?? null;
   });
+}
+
+export /**
+ * Fairness-aware candidate selection: walks the bounded candidate list and
+ * picks the first job whose organization is below its concurrency cap. Jobs
+ * without an organization are always eligible. One organization can therefore
+ * never monopolize the worker fleet while others wait.
+ */
+function pickFairCandidate(
+  db: import("@/lib/db/client").DB,
+  candidates: Array<{ id: string; organization_id: string | null }>,
+  orgConcurrency?: (organizationId: string) => number,
+): { id: string } | null {
+  if (!orgConcurrency) return candidates[0] ?? null;
+  const runningByOrg = new Map<string, number>();
+  const orgRows = db
+    .prepare("SELECT organization_id, COUNT(*) AS n FROM jobs WHERE status = 'running' AND organization_id IS NOT NULL GROUP BY organization_id")
+    .all() as Array<{ organization_id: string; n: number }>;
+  for (const row of orgRows) runningByOrg.set(row.organization_id, Number(row.n));
+  for (const candidate of candidates) {
+    if (!candidate.organization_id) return candidate;
+    const cap = Math.max(1, orgConcurrency(candidate.organization_id));
+    const running = runningByOrg.get(candidate.organization_id) ?? 0;
+    if (running < cap) return candidate;
+  }
+  return null;
 }
 
 export function renewLease(jobId: string, workerId: string, leaseMs: number): boolean {
@@ -229,6 +281,19 @@ export function failJob(jobId: string, errorCode: string, errorMessage: string |
        WHERE id = ? AND status IN ('running','queued','retrying')`,
     )
     .run(errorCode, errorMessage, now, now, jobId);
+  return res.changes > 0;
+}
+
+/** Phase 10 admin path: requeue a terminal `failed` job (audited by callers). */
+export function requeueFailedJob(jobId: string): boolean {
+  const now = Date.now();
+  const res = getDb()
+    .prepare(
+      `UPDATE jobs SET status = 'queued', run_after = ?, error_code = 'ADMIN_RETRY', error_message = NULL,
+              updated_at = ?, worker_id = NULL, lease_expires_at = NULL, cancel_requested_at = NULL
+       WHERE id = ? AND status = 'failed'`,
+    )
+    .run(now, now, jobId);
   return res.changes > 0;
 }
 

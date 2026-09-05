@@ -4,6 +4,7 @@ import {
   getTestRunById,
   requeueTestRunForRetry,
   saveTestRunFinal,
+  updateTestRunBrowser,
   updateTestRunStage,
   updateTestRunStarted,
   updateTestRunStatus,
@@ -149,6 +150,13 @@ export function createTestRunPersistence(options: PersistenceOptions = {}): Test
     onFinished(snap: TestRunSnapshot, info: TestRunInfo): void {
       const row = getTestRunById(snap.runId);
       if (!row) return;
+      if (snap.browserVersion) {
+        try {
+          updateTestRunBrowser(snap.runId, snap.browserVersion);
+        } catch {
+          // Best-effort reproducibility metadata.
+        }
+      }
       if (info.state === "failed" && !snap.startedAt && info.completed === 0 && options.shouldRetry?.(snap.errorCode)) {
         // Transient infrastructure failure before any test ran: keep the run
         // queued for the retry attempt. The quota reservation stays open and is

@@ -36,6 +36,10 @@ export const ERROR_CATALOG = {
   SUBSCRIPTION_STATE_INVALID: { status: 409, message: "This action is not possible in the subscription's current state.", retryable: false },
   WEBHOOK_SIGNATURE_INVALID: { status: 400, message: "The webhook signature could not be verified.", retryable: false },
   PAYMENT_REQUIRED: { status: 402, message: "This feature requires a paid plan.", retryable: false },
+  // Phase 9 cross-browser testing.
+  BROWSER_RUNTIME_UNAVAILABLE: { status: 503, message: "This browser runtime is not available on this deployment.", retryable: false },
+  BROWSER_NOT_SUPPORTED: { status: 400, message: "This browser is not supported for testing.", retryable: false },
+  MATRIX_LIMIT: { status: 400, message: "The browser matrix exceeds the configured limits.", retryable: false },
   // Phase 8 AI assistance. Messages are the exact strings the UI shows; none
   // of them reveal the provider, the model or any request/response content.
   AI_NOT_CONFIGURED: { status: 503, message: "AI assistance is currently unavailable.", retryable: false },
@@ -47,6 +51,25 @@ export const ERROR_CATALOG = {
   AI_INVALID_OUTPUT: { status: 502, message: "The AI response could not be validated. Please try again.", retryable: true },
   AI_CONTEXT_TOO_LARGE: { status: 413, message: "There is too much data for a single AI analysis.", retryable: false },
   AI_UNAUTHORIZED_CONTEXT: { status: 404, message: "Resource not found.", retryable: false },
+  // Phase 10 organizations, public API, webhooks.
+  ORGANIZATION_NOT_FOUND: { status: 404, message: "Organization not found.", retryable: false },
+  ORGANIZATION_ACCESS_DENIED: { status: 403, message: "You don't have access to this organization.", retryable: false },
+  ROLE_REQUIRED: { status: 403, message: "Your role does not permit this action.", retryable: false },
+  INVITATION_EXPIRED: { status: 410, message: "This invitation has expired.", retryable: false },
+  INVITATION_REVOKED: { status: 410, message: "This invitation is no longer valid.", retryable: false },
+  INVITATION_INVALID: { status: 404, message: "This invitation could not be found.", retryable: false },
+  SEAT_LIMIT_REACHED: { status: 409, message: "All seats for this organization are in use.", retryable: false },
+  API_KEY_INVALID: { status: 401, message: "The API key is invalid.", retryable: false },
+  API_KEY_EXPIRED: { status: 401, message: "The API key has expired.", retryable: false },
+  API_SCOPE_DENIED: { status: 403, message: "The API key is missing a required scope.", retryable: false },
+  API_DISABLED: { status: 404, message: "The public API is not available on this deployment.", retryable: false },
+  IDEMPOTENCY_CONFLICT: { status: 409, message: "This idempotency key was already used with a different request.", retryable: false },
+  WEBHOOK_DESTINATION_BLOCKED: { status: 400, message: "This webhook destination is not allowed.", retryable: false },
+  WEBHOOK_DELIVERY_FAILED: { status: 502, message: "The webhook could not be delivered.", retryable: true },
+  EXPORT_NOT_READY: { status: 409, message: "The export is not ready yet.", retryable: true },
+  POLICY_FAILED: { status: 200, message: "The quality gates for this organization were not met.", retryable: false },
+  SSO_NOT_CONFIGURED: { status: 404, message: "Single sign-on is not configured for this organization.", retryable: false },
+  SSO_NOT_ENABLED: { status: 404, message: "Single sign-on is not available on this deployment.", retryable: false },
   INTERNAL: { status: 500, message: "The request could not be completed.", retryable: false },
 } as const;
 
@@ -65,9 +88,11 @@ export class AppError extends Error {
   readonly status: number;
   readonly retryable: boolean;
   readonly userMessage: string;
+  /** For RATE_LIMITED: seconds until the caller may retry. */
+  readonly retryAfterSeconds?: number;
   readonly cause?: unknown;
 
-  constructor(code: ErrorCode, options: { message?: string; retryable?: boolean; cause?: unknown } = {}) {
+  constructor(code: ErrorCode, options: { message?: string; retryable?: boolean; cause?: unknown; retryAfterSeconds?: number } = {}) {
     const entry = ERROR_CATALOG[code];
     super(options.message ?? entry.message);
     this.name = "AppError";
@@ -75,6 +100,7 @@ export class AppError extends Error {
     this.status = entry.status;
     this.retryable = options.retryable ?? entry.retryable;
     this.userMessage = options.message ?? entry.message;
+    this.retryAfterSeconds = options.retryAfterSeconds;
     this.cause = options.cause;
   }
 }

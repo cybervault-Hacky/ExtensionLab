@@ -37,13 +37,19 @@ export async function persistRunArtifacts(input: {
   screenshots: CapturedScreenshot[];
   runtimeEvents: RuntimeEventLike[];
   network: NetworkEntryLike[];
+  /**
+   * Phase 9: matrix children cap their screenshot artifacts at the
+   * deployment's MAX_MATRIX_ARTIFACTS (still bounded by MAX_SCREENSHOTS).
+   */
+  maxScreenshots?: number;
 }): Promise<ArtifactSummary[]> {
   const created: ArtifactSummary[] = [];
   // Retention follows the owner's plan at the time the evidence is produced.
   const expiresAt = Date.now() + getRetentionForUser(input.userId).artifactRetentionMs;
   const config = testConfig();
+  const screenshotCap = Math.min(config.MAX_SCREENSHOTS, Math.max(1, input.maxScreenshots ?? config.MAX_SCREENSHOTS));
 
-  for (const shot of input.screenshots.slice(0, config.MAX_SCREENSHOTS)) {
+  for (const shot of input.screenshots.slice(0, screenshotCap)) {
     if (shot.bytes.byteLength === 0 || shot.bytes.byteLength > config.MAX_ARTIFACT_SIZE) continue;
     const summary = await writeArtifact({
       runId: input.runId,

@@ -28,6 +28,12 @@ export interface PlanFeatures {
   priorityExecution: boolean;
   /** Phase 8: AI assistance (explanations, summaries, suggestions) may be requested. */
   aiEnabled: boolean;
+  /** Phase 9: cross-browser matrix testing may be requested. */
+  crossBrowserEnabled: boolean;
+  /** Phase 9: baseline/regression comparisons may be created. */
+  regressionTesting: boolean;
+  /** Phase 9: advanced test suites (setup/teardown, dependencies, templates beyond the core suite). */
+  advancedSuites: boolean;
 }
 
 export interface PlanLimits {
@@ -41,6 +47,10 @@ export interface PlanLimits {
   maxExtensionSize: number;
   /** Queued + running automated test runs at the same time. */
   maxConcurrentRuns: number;
+  /** Phase 9: browser executions admitted at once for one user. */
+  browserConcurrency: number;
+  /** Phase 9: most browsers selectable in one matrix run. */
+  maxBrowsersPerRun: number;
   /** Minimum number of days test-run/report history is kept. */
   historyRetentionDays: number;
   /** Days runtime artifacts are kept after a run. */

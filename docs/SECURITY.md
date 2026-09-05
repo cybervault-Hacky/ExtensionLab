@@ -20,10 +20,11 @@ maintainers; do not open public issues for exploitable findings.
    exclude stack traces, file paths, hostnames, container ids, socket paths,
    tokens and cookies.
 
-## Sandbox isolation (Phase 3, unchanged)
+## Sandbox isolation (Phase 3, unchanged; identical for every Phase 9 browser)
 
-Each automated test run creates a fresh container from the pinned
-`SANDBOX_IMAGE` (`sandbox/Dockerfile`, runs as `node`, no shell entrypoint):
+Each automated test run creates a fresh container from a pinned image
+(`sandbox/Dockerfile` for Chromium; `sandbox/chromium|edge|firefox/Dockerfile`
+per browser, runs as `node`, no shell entrypoint):
 
 | Control | Flag |
 | --- | --- |
@@ -38,7 +39,16 @@ Each automated test run creates a fresh container from the pinned
 | Lifetime | `SANDBOX_TIMEOUT`, orphan sweeps, `extensionlab.sandbox=1` label for cleanup, destroyed on completion, cancellation, timeout and worker shutdown |
 
 `tests/phase6/docker-security.test.ts` asserts these flags on the exact
-`docker create` argument list; the E2E suite inspects a live container.
+`docker create` argument list; the E2E suite inspects a live container; and
+`tests/phase9/security.test.ts` re-asserts the identical hardening for the
+chromium, edge and firefox containers — adding browsers added **no** new
+controls and weakened none. The only per-browser input is the validated,
+server-set `EXTENSIONLAB_BROWSER` environment variable; there are no
+user-supplied browser flags, no JS/eval, no console commands, no raw CDP or
+shell passthrough, and selectors stay strict-validated on every engine
+(Firefox included). Cross-browser comparison evidence is bounded and
+redacted before storage, and public/shared views expose browser metadata
+only — never images, executables, container paths, hosts or Docker ids.
 
 The worker is the only process that talks to Docker. Access to the Docker
 socket is equivalent to root on that host, so run the worker on a dedicated
@@ -203,8 +213,11 @@ identifiers surfaced to users in error messages (`Reference: req_xxxxx`).
 - Application images run as uid 10001, contain production dependencies only,
   and the web image has no Docker CLI. The worker image pins the Docker CLI
   version through a build argument.
-- The sandbox image is built from `node:22-bookworm-slim` with Chromium and
-  no package managers or shells exposed to the runner control API.
+- The sandbox images are built from `node:22-bookworm-slim` with the
+  browser installed per image (Chromium, Microsoft Edge, or Firefox +
+  geckodriver with a pinned, SHA-256-verified download) and no package
+  managers or shells exposed to the runner control API. Each browser has its
+  own image tag; none share an executable.
 
 ## Residual risks and recommendations
 
@@ -216,3 +229,40 @@ identifiers surfaced to users in error messages (`Reference: req_xxxxx`).
 - Chromium in the sandbox runs with `--no-sandbox` inside the container
   (container isolation is the boundary); keep the image updated and keep
   `SANDBOX_NETWORK_MODE=restricted` or `none`.
+
+## Multi-tenant isolation (Phase 10)
+
+Organizations add a second ownership axis. The guarantees:
+
+1. **Tenant isolation in the data layer.** Every organization-scoped read
+   (packages, runs, matrices, reports, keys, webhooks, audit, exports,
+   publications) filters by `organization_id`; API-key principals are bound
+   to their key's organization and can never supply or change it via request
+   parameters. Cross-tenant access is indistinguishable from a missing
+   resource (404) — no existence oracle. Proven by
+   `tests/phase10/tenant-isolation.test.ts` and the route tests.
+2. **Server-side RBAC everywhere.** The centralized authorizer
+   (`authorizeOrgAction`) gates every organization operation; UI hiding is
+   cosmetic. Viewers cannot run expensive operations or manage keys and
+   settings.
+3. **API keys fail closed.** Hashed at rest, scope- and role-checked, expiry
+   and revocation enforced at authentication time, never unrestricted.
+4. **Webhooks are untrusted outbound calls.** HTTPS-only destinations with
+   SSRF/private-IP/metadata and all-record DNS checks at registration *and*
+   delivery, no redirects, response bodies never read, HMAC-signed payloads
+   with timestamp + unique event id for replay protection, secrets shown
+   once.
+5. **Public reports are a narrow projection.** Published pages expose scores,
+   browser outcomes and provenance labels only — never organization
+   metadata, source, internal URLs or container ids.
+6. **SSO never fabricates authentication.** The configuration layer routes;
+   assertion validation is a deployment-time provider adapter (see
+   `docs/SSO.md`). Secrets are write-only and masked everywhere.
+7. **No new bypass APIs.** The public v1 API routes through the same
+   entitlement, quota and concurrency services as the dashboard, with
+   additional per-key/org/IP rate limits. The internal admin abstraction is
+   config-gated, strongly authorized and audited, and executes no shell or
+   Docker commands.
+
+Security docs describe a system *designed to support* these properties; they
+make no certification claims.

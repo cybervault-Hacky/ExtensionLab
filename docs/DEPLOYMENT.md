@@ -88,6 +88,33 @@ refuses to run when a mandatory value is missing or unsafe.
 | `SANDBOX_TEMP_ROOT` | `/tmp/extensionlab-runtime` | Where packages are staged before `docker cp`. |
 | `SANDBOX_MAX_EVENTS`, `SANDBOX_MAX_EVENT_SIZE`, `SANDBOX_MAX_LOG_LENGTH`, `SANDBOX_MAX_NETWORK_EVENTS` | see `.env.example` | Event caps (Phase 3). |
 
+### Browsers (Phase 9)
+
+Build the per-browser images on every Docker-capable host that should serve
+cross-browser tests:
+
+```bash
+npm run sandbox:build:matrix    # chromium + edge + firefox images
+# individual: sandbox:build:chromium | sandbox:build:edge | sandbox:build:firefox
+# legacy (Chromium only) still works: npm run sandbox:build
+```
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SANDBOX_IMAGE_CHROMIUM` | falls back to `SANDBOX_IMAGE` | Dedicated Chromium image; set to `extensionlab-sandbox-chromium:local` after `sandbox:build:chromium`. |
+| `SANDBOX_IMAGE_EDGE` | `extensionlab-sandbox-edge:local` | Edge runs its own image/executable — never the Chromium one. |
+| `SANDBOX_IMAGE_FIREFOX` | `extensionlab-sandbox-firefox:local` | Firefox + pinned geckodriver. |
+| `BROWSER_CHROMIUM_VERSION` / `BROWSER_EDGE_VERSION` / `BROWSER_FIREFOX_VERSION` | `bundled` | Version label (e.g. image tag) shown in the UI and recorded on runs; the exact version is also detected at runtime. |
+| `BROWSER_<ID>_EXECUTABLE` / `BROWSER_<ID>_ENABLED` | per-browser | Executable inside the container / runtime kill-switch. |
+| `MAX_BROWSERS_PER_MATRIX` | `3` | Hard cap 3. |
+| `MAX_MATRIX_TESTS` / `MAX_MATRIX_CONCURRENCY` / `MAX_MATRIX_ARTIFACTS` | `32` / `2` / `24` | Matrix limits. |
+| `MATRIX_TIMEOUT_MS` / `MATRIX_BROWSER_TIMEOUT_MS` | `480000` / `150000` | Matrix and per-child budgets. |
+
+A browser whose image is missing is reported unavailable
+(`BROWSER_RUNTIME_UNAVAILABLE`, HTTP 503) and matrix creation fails closed
+before anything is queued or charged — build the image or set
+`BROWSER_<ID>_ENABLED=0` to hide the runtime. See [BROWSERS.md](BROWSERS.md).
+
 ### Jobs / worker
 
 | Variable | Default | Notes |
@@ -305,3 +332,27 @@ message so nobody deploys against an unsupported backend by accident.
    sandboxes and reschedule anything left; the next worker recovers expired
    leases automatically.
 5. Verify `/api/ready` reports `worker.live ≥ 1` and `sandbox.available: true`.
+
+## Phase 10 deployment additions
+
+- **Database**: SQLite stays the development default. Production may use
+  PostgreSQL via `DATABASE_URL` through the existing repository layer; a
+  `postgres://` URL on a non-production config is a hard startup error.
+- **Coordination**: single-node deployments keep `COORDINATION_PROVIDER=memory`
+  (default). Multi-worker web/worker fleets should set
+  `COORDINATION_PROVIDER=redis` and `REDIS_URL` so API rate limits and locks
+  are shared; Redis is loaded lazily and a production misconfiguration fails
+  at startup with a descriptive error.
+- **Migrations**: `npm run db:migrate` applies `006_phase10_organizations.sql`
+  (13 organization tables, `organization_id` columns and indexes). The
+  migration is deterministic, transactional and FK-safe; Phase 5 data is
+  untouched.
+- **Backups & DR**: back up the database (SQLite file or PostgreSQL dump) and
+  the storage root together — package blobs are content-addressed and
+  verified by SHA-256 on read, so a consistent pair restores cleanly. Recovery
+  objectives are operational choices (RPO = your backup cadence; RTO = image
+  pull + migrate + restart, typically minutes). No uptime claims are made
+  here — measure your own.
+- **Env review**: every Phase 10 knob is documented in `.env.example`
+  (organizations, public API, webhooks, coordination, SSO, fairness) with
+  safe defaults and startup validation.

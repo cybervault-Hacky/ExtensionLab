@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "ExtensionLab E2E Regression Extension",
+  "version": "2.0.0",
+  "description": "Version B of the regression fixture: introduces a runtime error.",
+  "permissions": ["storage"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Regression" },
+  "content_scripts": [
+    {
+      "matches": ["http://127.0.0.1/*", "http://localhost/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

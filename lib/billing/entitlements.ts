@@ -296,6 +296,76 @@ export function getMaxConcurrentRuns(userId: string): number {
   return getUserPlan(userId).maxConcurrentRuns;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 9: cross-browser entitlements. Routes and services never compare plan
+// ids directly; every browser-matrix capability is decided here.
+
+/** Cross-browser matrix runs (more than one browser or any non-Chromium browser). */
+export function canUseCrossBrowser(userId: string): EntitlementResult {
+  const plan = getUserPlan(userId);
+  if (plan.crossBrowserEnabled) return { allowed: true };
+  return {
+    allowed: false,
+    reason: "plan",
+    requiredPlan: firstPlanWith((p) => p.crossBrowserEnabled, plan),
+    message: "Cross-browser testing is not included in your plan.",
+  };
+}
+
+export function getMaxBrowsersPerRun(userId: string): number {
+  return getUserPlan(userId).maxBrowsersPerRun;
+}
+
+/** Simultaneous browser executions admitted for one user. */
+export function getBrowserConcurrency(userId: string): number {
+  return getUserPlan(userId).browserConcurrency;
+}
+
+export function canUseRegressionTesting(userId: string): EntitlementResult {
+  const plan = getUserPlan(userId);
+  if (plan.regressionTesting) return { allowed: true };
+  return {
+    allowed: false,
+    reason: "plan",
+    requiredPlan: firstPlanWith((p) => p.regressionTesting, plan),
+    message: "Regression comparisons are not included in your plan.",
+  };
+}
+
+export function canUseAdvancedSuites(userId: string): EntitlementResult {
+  const plan = getUserPlan(userId);
+  if (plan.advancedSuites) return { allowed: true };
+  return {
+    allowed: false,
+    reason: "plan",
+    requiredPlan: firstPlanWith((p) => p.advancedSuites, plan),
+    message: "Advanced test suites are not included in your plan.",
+  };
+}
+
+/**
+ * Quota check for a browser matrix: one browser execution consumes one
+ * test_run unit, so a 3-browser matrix needs `count` remaining units. This is
+ * the documented, deterministic matrix quota policy (docs/BROWSERS.md).
+ */
+export function canRunTestsN(userId: string, count: number, now = Date.now()): EntitlementResult {
+  const effective = getEffectivePlan(userId, now);
+  const usage = getQuotaUsage(userId, "test_run", now);
+  if (usage.remaining >= count) return { allowed: true };
+  return {
+    allowed: false,
+    reason: "quota",
+    quota: {
+      kind: "test_run",
+      currentUsage: usage.used + usage.reserved,
+      limit: usage.limit,
+      resetAt: usage.resetAt,
+      planId: effective.plan.id,
+      requiredPlan: smallestPlanWithLimit(getPlanCatalog(), "test_run", effective.plan.id),
+    },
+  };
+}
+
 export function getMaxExtensionSize(userId: string): number {
   return getUserPlan(userId).maxExtensionSize;
 }

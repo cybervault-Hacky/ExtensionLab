@@ -9,12 +9,23 @@ export interface ContainerHandle {
   controlPort: number;
   controlClient: ControlClient;
   runnerToken: string;
+  /** Browser runtime the container was created for (Phase 9; defaults to chromium). */
+  browserId?: string;
+}
+
+export interface CreateSandboxOptions {
+  /**
+   * Phase 9 browser runtime. The driver picks the pinned per-browser image and
+   * tells the in-container runner which browser adapter to start. Unknown ids
+   * must never reach this layer (validated by the browser registry).
+   */
+  browserId?: string;
 }
 
 export interface SandboxDriver {
   readonly name: string;
   available(): Promise<boolean>;
-  create(sandboxId: string, sourcePath: string, runnerToken: string): Promise<ContainerHandle>;
+  create(sandboxId: string, sourcePath: string, runnerToken: string, options?: CreateSandboxOptions): Promise<ContainerHandle>;
   remove(handle: ContainerHandle): Promise<void>;
   isRunning(handle: ContainerHandle): Promise<boolean>;
 }

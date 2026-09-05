@@ -5,6 +5,10 @@ import { EventEmitter } from "node:events";
 import { SandboxManager } from "@/lib/runtime/sandbox-manager";
 import { getSandboxConfig } from "@/lib/runtime/config";
 import { generateReferenceId, generateSandboxId, generateSessionToken } from "@/lib/runtime/ids";
+import { getBrowserProfile } from "@/lib/browsers/registry";
+import { isActionSupported, isAssertionSupported, staticallySkippedTestsForBrowser } from "@/lib/browsers/test-compat";
+import type { BrowserId } from "@/lib/browsers/types";
+import { discoverTests } from "./registry";
 import { evaluateAssertion } from "./assertions";
 import { computeTestScore } from "./scoring";
 import { generateDiagnostics } from "./diagnostics";
@@ -35,6 +39,8 @@ export interface TestRunCreateInput {
   tests: TestCase[];
   testUrl?: string;
   clientIp: string;
+  /** Phase 9: browser runtime for this execution (defaults to Chromium). */
+  browser?: BrowserId;
   /**
    * Phase 6: the background worker supplies the persisted run id and skips
    * the per-IP window limit because admission control (quota, per-user and
@@ -101,7 +107,9 @@ export class TestRunManager {
       token,
       sourcePath: input.sourcePath,
       testUrl: input.testUrl,
+      browserId: input.browser ?? "chromium",
       tests: input.tests,
+      discovery: discoverTests(input.analysis).context,
       state: "idle",
       createdAt: Date.now(),
       expiresAt: Date.now() + config.MAX_TEST_RUN_TIME + 15 * 60 * 1000,
@@ -229,10 +237,13 @@ export class TestRunManager {
       this.notifyStatus(run);
 
       const sourcePath = run.snap.sourcePath;
+      const browserId = (run.snap.browserId ?? "chromium") as BrowserId;
+      const browserProfile = getBrowserProfile(browserId);
       const created = await this.sandboxManager.create({
         sourcePath,
         testUrl: run.snap.testUrl ?? testConfig().DEFAULT_TEST_PAGE_URL,
         clientIp: "test-runner",
+        browserId,
       });
       run.snap.sandboxId = created.sandboxId;
       run.snap.sandboxToken = created.sessionToken;
@@ -247,10 +258,35 @@ export class TestRunManager {
       this.emit(run, { type: "state", state: "running" });
       this.notifyStatus(run);
 
+      // Capture the exact browser version the runner detected (Phase 9).
+      try {
+        const info = this.sandboxManager.getInfo(created.sandboxId, created.sessionToken);
+        if (info.browser.version && info.browser.version !== "isolated-container") {
+          run.snap.browserVersion = info.browser.version;
+        }
+      } catch {
+        // Version detection is best-effort; the configured label is the fallback.
+      }
+
       const tests = run.snap.tests ?? [];
+      const statusesById = new Map<string, string>();
+      const staticSkips = staticallySkippedTestsForBrowser(browserProfile, {
+        manifestVersion: run.snap.discovery?.manifestVersion ?? "unknown",
+        hasServiceWorker: run.snap.discovery?.hasServiceWorker ?? false,
+      });
       for (const test of tests) {
         if (timedOut || run.snap.state !== "running") break;
-        const result = await this.executeTest(run, created.sandboxId, test);
+        const dependencyBlock = this.unsatisfiedDependency(test, statusesById);
+        const staticSkip = staticSkips.find((rule) => rule.applies(test.id));
+        let result: TestResult;
+        if (dependencyBlock) {
+          result = this.skippedResult(run, test, dependencyBlock);
+        } else if (staticSkip) {
+          result = this.skippedResult(run, test, `Unsupported on ${browserProfile.displayName}: ${staticSkip.reason}`);
+        } else {
+          result = await this.executeTest(run, created.sandboxId, test, browserProfile);
+        }
+        statusesById.set(test.id, result.status);
         run.snap.results.push(result);
         this.emit(run, { type: "test-result", result: publicResult(result) });
       }
@@ -346,6 +382,7 @@ export class TestRunManager {
     run: ManagedRun,
     sandboxId: string,
     test: TestCase,
+    browserProfile = getBrowserProfile("chromium"),
   ): Promise<TestResult> {
     const startedAt = Date.now();
     const result: TestResult = {
@@ -363,6 +400,7 @@ export class TestRunManager {
       errors: [],
       warnings: [],
       runId: run.snap.runId,
+      browserId: browserProfile.browserId,
     };
 
     if (test.skipReason) {
@@ -396,6 +434,16 @@ export class TestRunManager {
           result.status = "error";
           result.errors.push("Unsafe test action.");
           break;
+        }
+        // Capability gate: an action the browser cannot safely perform is
+        // skipped explicitly — never executed, never silently ignored.
+        const actionSupport = isActionSupported(browserProfile, action.type);
+        if (!actionSupport.supported) {
+          result.steps.push(`${action.type} — skipped (unsupported on ${browserProfile.displayName})`);
+          result.warnings.push(
+            `Action ${action.type} is not supported by the ${browserProfile.displayName} runtime and was skipped.`,
+          );
+          continue;
         }
         result.steps.push(`${action.type}${action.selector ? ` ${action.selector}` : ""}`);
         const actionResponse = await this.sandboxManager.executeTestAction(sandboxId, this.sandboxTokenFor(run), action);
@@ -446,7 +494,17 @@ export class TestRunManager {
           result.warnings.push("Broad host permissions are declared. Review whether this access is required.");
         }
 
+        let unsupportedAssertionCount = 0;
         for (const assertion of test.assertions) {
+          // Capability gate: assertions the browser cannot support are skipped,
+          // not failed — the extension is not blamed for missing capabilities.
+          const support = isAssertionSupported(browserProfile, assertion.type);
+          if (!support.supported) {
+            unsupportedAssertionCount += 1;
+            const skipReason = `Assertion ${assertion.type} requires a capability the ${browserProfile.displayName} runtime does not support (${support.unsupported.join(", ")}).`;
+            result.assertions.push({ assertion, passed: false, skipped: true, skipReason, message: skipReason });
+            continue;
+          }
           const outcome = evaluateAssertion(assertion, evidenceContext);
           result.assertions.push(outcome);
           if (outcome.passed) {
@@ -456,7 +514,10 @@ export class TestRunManager {
           }
         }
 
-        if (result.errors.length > 0 && test.category === "content_script") {
+        if (unsupportedAssertionCount > 0 && unsupportedAssertionCount === test.assertions.length && result.errors.length === 0) {
+          result.status = "skipped";
+          result.skippedReason = `Not supported by the ${browserProfile.displayName} runtime.`;
+        } else if (result.errors.length > 0 && test.category === "content_script") {
           result.status = "skipped";
           result.skippedReason = "Unable to verify content-script execution for this configuration.";
         } else if (result.errors.length > 0) {
@@ -491,6 +552,46 @@ export class TestRunManager {
     }
 
     return result;
+  }
+
+  /** Phase 9: builds an explicit skipped result (dependency/capability skips). */
+  private skippedResult(run: ManagedRun, test: TestCase, reason: string): TestResult {
+    const now = Date.now();
+    return {
+      testId: test.id,
+      name: test.name,
+      description: test.description,
+      category: test.category,
+      status: "skipped",
+      duration: 0,
+      startedAt: now,
+      finishedAt: now,
+      steps: [],
+      assertions: [],
+      evidence: [],
+      errors: [],
+      warnings: [],
+      skippedReason: reason,
+      runId: run.snap.runId,
+      browserId: run.snap.browserId,
+      browserVersion: run.snap.browserVersion,
+    };
+  }
+
+  /**
+   * Phase 9: explicit test dependencies. A test whose dependency did not pass
+   * (or warning) is skipped with a reason naming the dependency.
+   */
+  private unsatisfiedDependency(test: TestCase, statusesById: Map<string, string>): string | null {
+    if (!test.dependsOn || test.dependsOn.length === 0) return null;
+    for (const dependencyId of test.dependsOn) {
+      const status = statusesById.get(dependencyId);
+      if (status === undefined) continue; // dependency not part of this suite run
+      if (status !== "passed" && status !== "warning") {
+        return `Skipped because dependency "${dependencyId}" did not pass (${status}).`;
+      }
+    }
+    return null;
   }
 
   private sandboxTokenFor(run: ManagedRun): string {
@@ -529,6 +630,9 @@ export class TestRunManager {
       reason: run.snap.reason,
       stage: run.snap.stage,
       errorCode: run.snap.errorCode,
+      browserId: run.snap.browserId,
+      browserVersion: run.snap.browserVersion,
+      engine: run.snap.browserId ? getBrowserProfile(run.snap.browserId as BrowserId).engine : undefined,
     };
   }
 

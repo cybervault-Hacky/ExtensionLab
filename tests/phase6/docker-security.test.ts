@@ -81,7 +81,8 @@ describe("Docker sandbox hardening (Phase 3/4 guarantees preserved)", () => {
     const args = await captureCreateArgs();
     expect(flag(args, "--label")).toBe("extensionlab.sandbox=1");
     const envs = args.filter((_, index) => args[index - 1] === "-e");
-    expect(envs.every((entry) => /^(RUNNER_TOKEN|SANDBOX_ID)=/.test(entry))).toBe(true);
+    // Phase 9 adds EXTENSIONLAB_BROWSER (a validated, non-secret browser id).
+    expect(envs.every((entry) => /^(RUNNER_TOKEN|SANDBOX_ID|EXTENSIONLAB_BROWSER)=/.test(entry))).toBe(true);
   });
 
   it("ships a sandbox image that runs as a non-root user without a shell entrypoint", () => {

@@ -38,6 +38,8 @@ export interface WorkerOptions {
   userConcurrency?: number;
   /** Optional per-user override (plan entitlement); falls back to `userConcurrency`. */
   userConcurrencyFor?: (userId: string) => number;
+  /** Phase 10 fairness: per-organization running-job cap resolver. */
+  orgConcurrencyFor?: (organizationId: string) => number;
   /** Reports sandbox availability in heartbeats (never exposed to clients directly). */
   sandboxProbe?: () => Promise<{ available: boolean; detail?: string }>;
   types?: readonly JobType[];
@@ -66,8 +68,8 @@ export class JobWorker {
   readonly workerId: string;
   private readonly handlers = new Map<JobType, JobHandler>();
   private readonly active = new Map<string, ActiveJob>();
-  private readonly options: Required<Omit<WorkerOptions, "sandboxProbe" | "types" | "userConcurrencyFor">> &
-    Pick<WorkerOptions, "sandboxProbe" | "types" | "userConcurrencyFor">;
+  private readonly options: Required<Omit<WorkerOptions, "sandboxProbe" | "types" | "userConcurrencyFor" | "orgConcurrencyFor">> &
+    Pick<WorkerOptions, "sandboxProbe" | "types" | "userConcurrencyFor" | "orgConcurrencyFor">;
   private stopping = false;
   private running = false;
   private loopPromise: Promise<void> | null = null;
@@ -283,6 +285,7 @@ export class JobWorker {
       types,
       leaseMs: this.options.leaseMs,
       excludeUserIds: [...excludeUserIds],
+      orgConcurrency: this.options.orgConcurrencyFor,
     });
   }
 

@@ -53,6 +53,9 @@ export function createQueuedTestRun(input: {
   analysis: ExtensionAnalysis;
   extensionId: string | null;
   testUrl?: string;
+  /** Phase 10: organization ownership + requested browser runtime. */
+  organizationId?: string | null;
+  browserId?: string | null;
 }): CreateRunResult {
   const config = getConfig();
   const { tests } = discoverTests(input.analysis);
@@ -73,12 +76,15 @@ export function createQueuedTestRun(input: {
       stage: "Queued",
       packageId: input.packageId,
       total: tests.length,
+      ...(input.organizationId ? { organizationId: input.organizationId } : {}),
+      ...(input.browserId ? { browserId: input.browserId } : {}),
     });
     // Reservation first: throws QuotaExceededError and rolls everything back.
     const reservation = reserveQuota({ userId: input.userId, kind: "test_run", resourceId: run.id });
     const { job } = enqueueJob({
       type: "AUTOMATED_TEST",
       userId: input.userId,
+      organizationId: input.organizationId ?? null,
       payload: {
         runId: run.id,
         packageId: input.packageId,
@@ -86,6 +92,7 @@ export function createQueuedTestRun(input: {
         testUrl: input.testUrl,
         testIds: tests.map((test) => test.id),
         reservationId: reservation.id,
+        ...(input.browserId ? { browserId: input.browserId } : {}),
       },
       resourceType: "test_run",
       resourceId: run.id,

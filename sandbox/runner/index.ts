@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { EventHub } from "./events";
-import { BrowserRunner } from "./browser";
+import { createSandboxBrowser, type SandboxBrowser } from "./browsers";
+import { isSandboxBrowserId } from "./browsers/types";
 import { startTestPageServer } from "./test-page";
 import { cleanupRuntimeDirectories } from "./cleanup";
 import { DEFAULT_TEST_PAGE_URL, validatePublicUrl } from "./security";
@@ -12,7 +13,9 @@ const ALLOWED_ACTIONS = new Set(["start", "stop", "reload", "open-url", "restart
 const ALLOWED_TEST_ACTIONS = new Set(["open_url", "reload_page", "wait", "click", "type", "select", "scroll", "inspect_text", "inspect_element", "open_popup", "clear_console", "capture_screenshot"]);
 
 const events = new EventHub();
-const browser = new BrowserRunner(events);
+// The browser runtime is fixed by the container image/ENV — never by requests.
+const browserId = isSandboxBrowserId(process.env.EXTENSIONLAB_BROWSER) ? process.env.EXTENSIONLAB_BROWSER : "chromium";
+const browser: SandboxBrowser = createSandboxBrowser(browserId, events);
 let status: SandboxStatus = "idle";
 let defaultPage = DEFAULT_TEST_PAGE_URL;
 
@@ -164,6 +167,12 @@ async function handleCommand(body: unknown): Promise<{ ok: boolean; status: stri
       await browser.reload();
       return { ok: true, status };
     case "restart-extension":
+      if (browserId === "firefox") {
+        // Temporary add-ons cannot be restarted in place in this runtime;
+        // report the limitation honestly instead of pretending to restart.
+        events.emit({ type: "extension", level: "warning", source: "extension", message: "Extension restart is not supported by the Firefox runtime." });
+        return { ok: false, status, message: "Extension restart is not supported by the Firefox runtime." };
+      }
       events.emit({ type: "extension", level: "info", source: "extension", message: "Extension restart requested." });
       await browser.reload();
       return { ok: true, status };
@@ -184,7 +193,8 @@ const server = createServer((request, response) => {
   const url = new URL(request.url ?? "/", "http://localhost");
 
   if (url.pathname === "/health") {
-    sendJson(response, 200, { ok: true, status });
+    // Browser product/version only — never paths, container ids or hosts.
+    sendJson(response, 200, { ok: true, status, browser: { id: browserId } });
     return;
   }
 

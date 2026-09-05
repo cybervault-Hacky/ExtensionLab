@@ -6,6 +6,37 @@ type ReportViewSource = ReportRow & {
   extensionVersion?: string | null;
 };
 
+/**
+ * Phase 9: projection for cross-browser matrix reports. Only explicitly
+ * listed, safe fields are exposed — never container ids, hosts, image names,
+ * executable paths or raw network data.
+ */
+function crossBrowserSection(input: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!input || input.kind !== "cross-browser-matrix") return null;
+  const payload = input;
+  const browsers = Array.isArray(payload.browsers) ? (payload.browsers as Array<Record<string, unknown>>) : [];
+  const compatibility = (payload.compatibility ?? null) as Record<string, unknown> | null;
+  return {
+    matrixRunId: typeof payload.matrixRunId === "string" ? payload.matrixRunId : null,
+    browsers: browsers.map((browser) => ({
+      browserId: browser.browserId,
+      version: browser.version,
+      engine: browser.engine,
+      status: browser.status,
+      executed: browser.executed === true,
+    })),
+    compatibility: compatibility
+      ? {
+          score: compatibility.score ?? null,
+          coverage: compatibility.coverage ?? null,
+          browsersPassing: compatibility.browsersPassing ?? [],
+          browsersFailing: compatibility.browsersFailing ?? [],
+          browsersUnavailable: compatibility.browsersUnavailable ?? [],
+        }
+      : null,
+  };
+}
+
 export function createReportView(
   report: ReportViewSource,
   payload: Record<string, unknown> | null,
@@ -53,6 +84,7 @@ export function createReportView(
       reason: typeof runtimeTests?.reason === "string" ? runtimeTests.reason : null,
     },
     findings: runtimeTests?.details ? extractFindings(runtimeTests.details) : [],
+    crossBrowser: crossBrowserSection(details),
     generatedWith: "ExtensionLab",
   };
 }
@@ -85,6 +117,7 @@ export function createPublicReportView(
     staticAnalysis: Record<string, unknown>;
     runtimeTests: { score: number | null; summary: Record<string, unknown> | null; status: string; outcome: string | null };
     findings: unknown[];
+    crossBrowser: Record<string, unknown> | null;
   };
   return {
     title: privateView.report.title ?? "Extension Test Report",
@@ -94,7 +127,25 @@ export function createPublicReportView(
     runtimeStatus: privateView.runtimeTests.status,
     tests: privateView.runtimeTests.status === "executed" ? privateView.runtimeTests.summary : null,
     findings: sanitizeFindings(privateView.findings),
+    crossBrowser: sanitizeCrossBrowser(privateView.crossBrowser),
     generatedWith: "ExtensionLab",
+  };
+}
+
+/** Public share views expose only safe browser metadata (no infrastructure details). */
+export function sanitizeCrossBrowser(section: unknown): Record<string, unknown> | null {
+  if (!section || typeof section !== "object") return null;
+  const record = section as Record<string, unknown>;
+  const browsers = Array.isArray(record.browsers) ? (record.browsers as Array<Record<string, unknown>>) : [];
+  return {
+    browsers: browsers.map((browser) => ({
+      browserId: typeof browser.browserId === "string" ? browser.browserId : null,
+      version: typeof browser.version === "string" || browser.version === null ? browser.version : null,
+      engine: typeof browser.engine === "string" || browser.engine === null ? browser.engine : null,
+      status: typeof browser.status === "string" ? browser.status : null,
+      executed: browser.executed === true,
+    })),
+    compatibility: record.compatibility ?? null,
   };
 }
 

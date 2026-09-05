@@ -142,6 +142,8 @@ export interface ExtensionAnalysis {
   files: FileStructure;
   issues: AnalyzerIssue[];
   healthScore: HealthScore;
+  /** Phase 9: static browser-compatibility notes (informational; runtime results stay authoritative). */
+  browserCompatibility?: import("@/lib/extension/browser-compat").BrowserCompatibilityAnalysis;
 }
 
 export interface AnalysisStep {

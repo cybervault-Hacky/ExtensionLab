@@ -31,6 +31,9 @@ declare module "chrome-remote-interface" {
     Target: {
       setDiscoverTargets(input: { discover: boolean }): Promise<unknown>;
     };
+    Browser: {
+      getVersion(): Promise<{ product?: string; version?: string }>;
+    };
   }
 
   export default function CDP(input: { port: number; target: string }): Promise<CdpClient>;

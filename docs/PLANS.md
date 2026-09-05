@@ -21,6 +21,11 @@ they cannot drift apart.
 | Advanced diagnostics (runtime logs, network evidence) | – | ✓ | ✓ |
 | Priority queue | – | – | ✓ |
 | AI assistance requests per period (Phase 8) | not included | 100 | 500 |
+| Cross-browser testing (Phase 9) | – | ✓ | ✓ |
+| Browsers per matrix run | 1 (Chromium only) | 3 | 3 |
+| Browser concurrency | 1 | 2 | 3 |
+| Regression testing / baselines (Phase 9) | – | ✓ | ✓ |
+| Advanced test suites — `service-worker`, `permission-smoke` (Phase 9) | – | ✓ | ✓ |
 
 "Period" is the calendar month for Free users and the **subscription billing
 period** (`currentPeriodStart` → `currentPeriodEnd`) for paid users; usage
@@ -47,7 +52,25 @@ PLAN_PRO_ARTIFACT_RETENTION_DAYS=30
 PLAN_PRO_PACKAGE_RETENTION_DAYS=60
 PLAN_PRO_AI_ENABLED=true
 PLAN_PRO_AI_LIMIT=100
+PLAN_PRO_CROSS_BROWSER=true
+PLAN_PRO_MAX_BROWSERS=3
+PLAN_PRO_BROWSER_CONCURRENCY=2
+PLAN_PRO_REGRESSION_TESTING=true
+PLAN_PRO_ADVANCED_SUITES=true
 ```
+
+Phase 9 notes:
+
+- **Cross-browser entitlements** (`crossBrowserEnabled`, `maxBrowsersPerRun`,
+  `browserConcurrency`, `regressionTesting`, `advancedSuites`) are read only
+  by the entitlement service — there is no `if plan === "pro"` anywhere, so
+  operators can reshape tiers via configuration without code changes.
+- `maxBrowsersPerRun` is additionally capped by the deployment-wide
+  `MAX_BROWSERS_PER_MATRIX` (default 3).
+- **Matrix quota policy (documented, deterministic):** one test-run unit per
+  browser execution — a suite × 3 browsers consumes 3 of the plan's
+  "automated test runs per period". Chromium-only runs stay available on
+  Free. See [BROWSERS.md](BROWSERS.md#quota-policy-deterministic-and-documented).
 
 AI assistance is the one feature flag that *is* environment-configurable
 (`PLAN_<PLAN>_AI_ENABLED`, `PLAN_<PLAN>_AI_LIMIT`), because operators may
@@ -169,3 +192,15 @@ Do not add a fourth plan; annual billing would be a second `price` on the same
 plan id (the data model already keys subscriptions by provider price id).
 Changing a limit is an environment change; changing a feature flag is a one
 line edit in `lib/billing/plans.ts` covered by `tests/phase7/plans-entitlements.test.ts`.
+
+## Organization plans (Phase 10)
+
+Organizations extend the same plan philosophy server-side. Defaults:
+Free (2 members, no API/webhooks/SSO/export, concurrency 2), Pro (10 members,
+API + webhooks + advanced audit + export + CI gates + advanced matrix,
+concurrency 4), Business (50 members, + SSO + high concurrency, 180-day
+retention, concurrency 8). Deployments override with `ORG_PLAN_<PLAN>_<KEY>`
+exactly like personal plans; concurrency is finally clamped by
+`ORG_MAX_CONCURRENCY`. Seat counts are provisioned values — billing changes
+them through the provider abstraction, and where a provider cannot update
+seats automatically an operator applies the change (documented limitation).

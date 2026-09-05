@@ -8,6 +8,7 @@
  * readiness/ops output).
  */
 
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { MAX_EXTENSION_SIZE } from "@/lib/extension/limits";
 
@@ -99,6 +100,57 @@ export interface AppConfig {
     maxConcurrencyPerUser: number;
     /** Days a stored AI result is kept (0 disables persistence). */
     resultRetentionDays: number;
+  };
+  /** Phase 10: organizations, public API, webhooks, coordination. */
+  organizations: {
+    maxPerUser: number;
+    maxMembers: number;
+    maxProjectsPerOrg: number;
+    maxApiKeysPerOrg: number;
+    maxWebhooksPerOrg: number;
+    invitationTtlMs: number;
+    defaultPlan: "free" | "pro" | "business";
+    auditRetentionDays: number;
+    exportExpiryMs: number;
+    exportRetentionDays: number;
+  };
+  publicApi: {
+    enabled: boolean;
+    keyTtlMs: number;
+    maxScopes: number;
+    rateLimits: { read: number; upload: number; analysis: number; test: number; matrix: number; report: number };
+  };
+  webhooks: {
+    timeoutMs: number;
+    maxRetries: number;
+    backoffBaseMs: number;
+    maxPayloadBytes: number;
+    historyPerWebhook: number;
+    /** Loopback/private delivery targets: only honoured in test environments. */
+    allowPrivateInTest: boolean;
+  };
+  coordination: {
+    provider: "memory" | "redis";
+    redisUrl: string | null;
+  };
+  sso: {
+    enabled: boolean;
+    oidcEnabled: boolean;
+    samlEnabled: boolean;
+  };
+  jobs10: {
+    orgMaxConcurrency: number;
+    fairnessScanLimit: number;
+    priorityInteractive: number;
+    priorityEnterprise: number;
+    priorityCi: number;
+    priorityNormal: number;
+  };
+  /** Phase 10: config-gated internal admin abstraction (jobs/queue only). */
+  adminApi: {
+    enabled: boolean;
+    /** SHA-256 of ADMIN_API_TOKEN; the raw token is never kept in config. */
+    tokenHash: string | null;
   };
   /** Requests per minute per client for the sensitive endpoints. */
   rateLimits: {
@@ -435,6 +487,69 @@ function buildConfig(): AppConfig {
       maxConcurrencyPerUser: num("AI_MAX_CONCURRENCY_PER_USER", 1, problems, { min: 1, max: 8 }),
       resultRetentionDays: num("AI_RESULT_RETENTION_DAYS", 30, problems, { min: 0, max: 3650 }),
     },
+    organizations: {
+      maxPerUser: num("ORG_MAX_PER_USER", 10, problems, { min: 1, max: 100 }),
+      maxMembers: num("ORG_MAX_MEMBERS", 50, problems, { min: 2, max: 500 }),
+      maxProjectsPerOrg: num("ORG_MAX_PROJECTS", 100, problems, { min: 1 }),
+      maxApiKeysPerOrg: num("ORG_MAX_API_KEYS", 20, problems, { min: 1 }),
+      maxWebhooksPerOrg: num("ORG_MAX_WEBHOOKS", 10, problems, { min: 1 }),
+      invitationTtlMs: num("ORG_INVITATION_TTL_MS", 7 * 24 * 3600 * 1000, problems, { min: 60_000 }),
+      defaultPlan: oneOf("ORG_DEFAULT_PLAN", ["free", "pro", "business"] as const, "free", problems),
+      auditRetentionDays: num("AUDIT_RETENTION_DAYS", 365, problems, { min: 1 }),
+      exportExpiryMs: num("EXPORT_EXPIRY_MS", 24 * 3600 * 1000, problems, { min: 60_000 }),
+      exportRetentionDays: num("EXPORT_RETENTION_DAYS", 7, problems, { min: 1 }),
+    },
+    publicApi: {
+      enabled: bool("PUBLIC_API_ENABLED", true),
+      keyTtlMs: num("API_KEY_TTL_MS", 365 * 24 * 3600 * 1000, problems, { min: 60_000 }),
+      maxScopes: num("API_KEY_MAX_SCOPES", 12, problems, { min: 1 }),
+      rateLimits: {
+        read: num("API_RATE_LIMIT_READ_PER_MIN", 240, problems, { min: 1 }),
+        upload: num("API_RATE_LIMIT_UPLOAD_PER_MIN", 30, problems, { min: 1 }),
+        analysis: num("API_RATE_LIMIT_ANALYSIS_PER_MIN", 60, problems, { min: 1 }),
+        test: num("API_RATE_LIMIT_TEST_PER_MIN", 30, problems, { min: 1 }),
+        matrix: num("API_RATE_LIMIT_MATRIX_PER_MIN", 10, problems, { min: 1 }),
+        report: num("API_RATE_LIMIT_REPORT_PER_MIN", 120, problems, { min: 1 }),
+      },
+    },
+    webhooks: {
+      timeoutMs: num("WEBHOOK_TIMEOUT", 10_000, problems, { min: 1000, max: 60_000 }),
+      maxRetries: num("WEBHOOK_MAX_RETRIES", 5, problems, { min: 0, max: 10 }),
+      backoffBaseMs: num("WEBHOOK_BACKOFF_BASE_MS", 30_000, problems, { min: 1000 }),
+      maxPayloadBytes: num("WEBHOOK_MAX_PAYLOAD_BYTES", 32 * 1024, problems, { min: 1024 }),
+      historyPerWebhook: num("WEBHOOK_HISTORY_PER_WEBHOOK", 100, problems, { min: 10 }),
+      // Deliberately not an env toggle: private webhook destinations are only
+      // permitted when the whole process runs in the test environment.
+      allowPrivateInTest: appEnv === "test",
+    },
+    coordination: {
+      provider: oneOf("COORDINATION_PROVIDER", ["memory", "redis"] as const, "memory", problems),
+      redisUrl: str("REDIS_URL") ?? null,
+    },
+    sso: {
+      enabled: bool("SSO_ENABLED", false),
+      oidcEnabled: bool("OIDC_ENABLED", false),
+      samlEnabled: bool("SAML_ENABLED", false),
+    },
+    jobs10: {
+      orgMaxConcurrency: num("ORG_MAX_CONCURRENCY", 5, problems, { min: 1, max: 64 }),
+      fairnessScanLimit: num("ORG_FAIRNESS_SCAN_LIMIT", 50, problems, { min: 1, max: 500 }),
+      priorityInteractive: num("JOB_PRIORITY_INTERACTIVE", 10, problems, { min: 0, max: 100 }),
+      priorityEnterprise: num("JOB_PRIORITY_ENTERPRISE", 8, problems, { min: 0, max: 100 }),
+      priorityCi: num("JOB_PRIORITY_CI", 5, problems, { min: 0, max: 100 }),
+      priorityNormal: num("JOB_PRIORITY_NORMAL", 0, problems, { min: -100, max: 100 }),
+    },
+    adminApi: (() => {
+      const enabled = bool("ADMIN_API_ENABLED", false);
+      const token = str("ADMIN_API_TOKEN") ?? null;
+      if (enabled && !token) {
+        problems.push("ADMIN_API_ENABLED=true requires ADMIN_API_TOKEN to be set (fail closed).");
+      }
+      return {
+        enabled,
+        tokenHash: token ? createHash("sha256").update(token).digest("hex") : null,
+      };
+    })(),
     rateLimits: {
       login: num("RATE_LIMIT_LOGIN_PER_MIN", 30, problems, { min: 1 }),
       signup: num("RATE_LIMIT_SIGNUP_PER_MIN", 30, problems, { min: 1 }),

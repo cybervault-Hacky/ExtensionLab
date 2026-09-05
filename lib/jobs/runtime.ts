@@ -1,6 +1,7 @@
 import "server-only";
 import { getConfig } from "@/lib/config/env";
-import { getMaxConcurrentRuns } from "@/lib/billing/entitlements";
+import { getBrowserConcurrency, getMaxConcurrentRuns } from "@/lib/billing/entitlements";
+import { getBrowserRegistryConfig } from "@/lib/browsers/registry";
 import { getSandboxManager } from "@/lib/runtime/sandbox-manager-instance";
 import { probeSandboxEnvironment } from "@/lib/runtime/availability";
 import { logger } from "@/lib/observability/logger";
@@ -8,6 +9,9 @@ import { JobWorker, type WorkerOptions } from "./worker";
 import { Scheduler } from "./scheduler";
 import { createAutomatedTestHandler } from "./handlers/automated-test";
 import { createCleanupHandler } from "./handlers/cleanup";
+import { createWebhookDeliveryHandler } from "./handlers/webhook-delivery";
+import { createOrgExportHandler } from "./handlers/org-export";
+import { getOrganizationEntitlements } from "@/lib/organizations/entitlements";
 import { createEmailHandler } from "./handlers/email";
 
 /**
@@ -22,14 +26,26 @@ export function createWorker(options: WorkerOptions = {}): JobWorker {
       const probe = await probeSandboxEnvironment();
       return { available: probe.available, detail: probe.available ? undefined : probe.reason };
     },
-    // Paid plans may run more jobs at once; SANDBOX_USER_CONCURRENCY is the floor.
-    userConcurrencyFor: (userId) => getMaxConcurrentRuns(userId),
+    // Paid plans may run more jobs at once; SANDBOX_USER_CONCURRENCY is the
+    // floor. Phase 9: browser executions (matrix children) are admitted under
+    // the plan's browser concurrency when it is higher, clamped by the
+    // deployment-wide MAX_MATRIX_CONCURRENCY ceiling.
+    userConcurrencyFor: (userId) =>
+      Math.max(
+        getMaxConcurrentRuns(userId),
+        Math.min(getBrowserConcurrency(userId), getBrowserRegistryConfig().limits.maxMatrixConcurrency),
+      ),
+    // Phase 10: organization fairness — one organization can never monopolize
+    // the worker fleet while others wait.
+    orgConcurrencyFor: (organizationId) => getOrganizationEntitlements(organizationId).orgMaxConcurrency,
     ...options,
   });
   worker
     .register(createAutomatedTestHandler({ sandboxManager, maxConcurrentRuns: config.sandbox.maxConcurrency }))
     .register(createEmailHandler())
-    .register(createCleanupHandler());
+    .register(createCleanupHandler())
+    .register(createWebhookDeliveryHandler())
+    .register(createOrgExportHandler());
   return worker;
 }
 
