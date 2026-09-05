@@ -3,7 +3,8 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { restoreUser, SESSION_COOKIE } from "@/lib/auth/session";
 import { getEffectivePlan } from "@/lib/billing/entitlements";
-import { AppShell, type AppShellUser } from "@/components/workspace/AppShell";
+import { AppShell, type AppShellUser, type AppShellWorkspace } from "@/components/workspace/AppShell";
+import { getActiveWorkspace } from "@/lib/organizations/authorization";
 
 export const dynamic = "force-dynamic";
 
@@ -27,5 +28,15 @@ export default async function DashboardLayout({ children }: { children: ReactNod
           ? "paid"
           : "free",
   };
-  return <AppShell user={viewUser}>{children}</AppShell>;
+  const active = await getActiveWorkspace(user.id);
+  const workspace: AppShellWorkspace | null =
+    active.kind === "organization" && active.organization
+      ? { id: active.organization.id, name: active.organization.name, slug: active.organization.slug, role: active.organization.role }
+      : null;
+  const options: AppShellWorkspace[] = active.options;
+  return (
+    <AppShell user={viewUser} workspace={workspace} workspaceOptions={options}>
+      {children}
+    </AppShell>
+  );
 }

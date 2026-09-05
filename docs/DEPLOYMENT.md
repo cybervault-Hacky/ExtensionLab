@@ -332,3 +332,27 @@ message so nobody deploys against an unsupported backend by accident.
    sandboxes and reschedule anything left; the next worker recovers expired
    leases automatically.
 5. Verify `/api/ready` reports `worker.live ≥ 1` and `sandbox.available: true`.
+
+## Phase 10 deployment additions
+
+- **Database**: SQLite stays the development default. Production may use
+  PostgreSQL via `DATABASE_URL` through the existing repository layer; a
+  `postgres://` URL on a non-production config is a hard startup error.
+- **Coordination**: single-node deployments keep `COORDINATION_PROVIDER=memory`
+  (default). Multi-worker web/worker fleets should set
+  `COORDINATION_PROVIDER=redis` and `REDIS_URL` so API rate limits and locks
+  are shared; Redis is loaded lazily and a production misconfiguration fails
+  at startup with a descriptive error.
+- **Migrations**: `npm run db:migrate` applies `006_phase10_organizations.sql`
+  (13 organization tables, `organization_id` columns and indexes). The
+  migration is deterministic, transactional and FK-safe; Phase 5 data is
+  untouched.
+- **Backups & DR**: back up the database (SQLite file or PostgreSQL dump) and
+  the storage root together — package blobs are content-addressed and
+  verified by SHA-256 on read, so a consistent pair restores cleanly. Recovery
+  objectives are operational choices (RPO = your backup cadence; RTO = image
+  pull + migrate + restart, typically minutes). No uptime claims are made
+  here — measure your own.
+- **Env review**: every Phase 10 knob is documented in `.env.example`
+  (organizations, public API, webhooks, coordination, SSO, fairness) with
+  safe defaults and startup validation.

@@ -811,6 +811,21 @@ injection defense, fake provider, testing, production setup, privacy, failure
 behaviour); `docs/SECURITY.md`, `docs/DEPLOYMENT.md`, `docs/PLANS.md`,
 `docs/OPERATIONS.md` and `docs/ARCHITECTURE.md` are updated for Phase 8.
 
+## Phase 10 — Enterprise, scale & public platform
+
+Organizations with owner/admin/developer/viewer roles, invitations and seats;
+immutable redacted audit trails; API keys with scopes and hashed storage; a
+versioned public API (`/api/v1`) with idempotency and per-key/org/IP rate
+limits; signed webhooks with SSRF protection and dead-letter retries;
+deterministic CI quality gates; async organization data export; published
+reports via a safe public projection; an SSO configuration layer with real
+DNS domain verification; and a fairness-aware multi-worker queue with Redis
+coordination. Personal workspaces and all Phase 1–9 behaviour are unchanged.
+
+Documentation: `docs/ORGANIZATIONS.md`, `docs/API.md`, `docs/API_KEYS.md`,
+`docs/WEBHOOKS.md`, `docs/ENTERPRISE.md`, `docs/SSO.md` (plus updates to
+SECURITY, DEPLOYMENT, OPERATIONS, ARCHITECTURE and PLANS).
+
 ## License
 
 Not yet specified. The repository is currently configured for private or

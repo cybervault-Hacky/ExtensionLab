@@ -300,3 +300,23 @@ Full reference in [AI.md](AI.md); operational summary:
 4. Back up the database and storage
 5. Migrate, roll web, then worker; verify `/api/ready`
 6. Watch `job.failed` / `worker.orphan_recovered` for the first hour
+
+## Phase 10 operations
+
+- **Queue fairness**: `claimNextJob` enforces per-organization concurrency
+  (entitlement-driven, clamped by `ORG_MAX_CONCURRENCY`) over a bounded scan
+  (`ORG_FAIRNESS_SCAN_LIMIT`). Watch queue depth per organization; backpressure
+  rejects enqueue beyond `JOB_MAX_QUEUE_LENGTH` / per-user caps.
+- **Webhook deliveries**: `WEBHOOK_DELIVERY` jobs retry with exponential
+  backoff (`WEBHOOK_BACKOFF_BASE_MS`, cap 1 h, `WEBHOOK_MAX_RETRIES`) then
+  dead-letter. Delivery history is in the org dashboard; the scheduler sweeps
+  due-but-pending deliveries for crash recovery.
+- **Cleanup additions** (scope `organizations`): webhook sweeps, expired
+  idempotency records (24 h), expired org exports (artifact + row), and
+  per-organization audit retention (`AUDIT_RETENTION_DAYS` floor, plan
+  extension). All idempotent; nothing deletes across organizations.
+- **Public API**: enable/disable with `PUBLIC_API_ENABLED`; rate-limit budgets
+  per class are environment-tunable and surfaced via `x-ratelimit-*` headers.
+  `Idempotency-Key` records expire after 24 hours.
+- **Internal admin**: queue depth, worker health, job retry/cancel are exposed
+  through a config-gated, audited abstraction — no shell or Docker execution.

@@ -315,3 +315,30 @@ The optional AI provider (Phase 8) sits outside the boundary as an untrusted
 HTTPS service: it receives redacted, allowlisted evidence and returns data
 that is validated before use. It has no path back into the sandbox, the
 database, the filesystem or the test engine.
+
+## Phase 10 additions
+
+- **Organizations** (`lib/organizations`): repository, entitlements, central
+  authorization (roles → actions), service (lifecycle, members, invitations,
+  billing hooks), exports. Personal workspaces are unchanged; org ownership
+  is an optional column on existing resources.
+- **Public API** (`app/api/v1`, `lib/api/v1-support`): API-key auth wrapper
+  (scope → creator-role action → per-key/org/IP rate buckets) with the
+  standard error envelope; `lib/idempotency` provides `Idempotency-Key`
+  semantics scoped to the owner.
+- **Webhooks** (`lib/webhooks`): signing (HMAC over `ts.eventId.body`),
+  SSRF-validated destinations, dispatch (persisted deliveries + durable
+  jobs), delivery worker with backoff/dead-letter, service CRUD.
+- **Coordination** (`lib/coordination`): rate limiting and advisory locks
+  behind a memory/Redis abstraction.
+- **Policies** (`lib/policies`): deterministic, server-evaluated CI gates
+  with evidence derived from stored runs/matrices/analyses.
+- **Publications** (`lib/reports/publications`): safe public projection for
+  published reports; `/extensions/:slug` pages default private.
+- **SSO layer** (`lib/sso`): configuration + masked secrets + real DNS TXT
+  domain verification; protocol exchange is a deployment-time adapter.
+- **Queue**: `WEBHOOK_DELIVERY` and `ORG_EXPORT` job types; fairness-aware
+  claiming; priority classes reorder but never bypass limits.
+
+Uploaded code remains untrusted data executed only in disposable containers;
+none of the new surfaces change that boundary.

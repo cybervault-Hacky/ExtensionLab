@@ -192,3 +192,15 @@ Do not add a fourth plan; annual billing would be a second `price` on the same
 plan id (the data model already keys subscriptions by provider price id).
 Changing a limit is an environment change; changing a feature flag is a one
 line edit in `lib/billing/plans.ts` covered by `tests/phase7/plans-entitlements.test.ts`.
+
+## Organization plans (Phase 10)
+
+Organizations extend the same plan philosophy server-side. Defaults:
+Free (2 members, no API/webhooks/SSO/export, concurrency 2), Pro (10 members,
+API + webhooks + advanced audit + export + CI gates + advanced matrix,
+concurrency 4), Business (50 members, + SSO + high concurrency, 180-day
+retention, concurrency 8). Deployments override with `ORG_PLAN_<PLAN>_<KEY>`
+exactly like personal plans; concurrency is finally clamped by
+`ORG_MAX_CONCURRENCY`. Seat counts are provisioned values — billing changes
+them through the provider abstraction, and where a provider cannot update
+seats automatically an operator applies the change (documented limitation).

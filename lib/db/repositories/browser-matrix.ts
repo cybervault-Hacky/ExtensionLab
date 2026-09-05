@@ -39,14 +39,15 @@ export function createMatrixRunRow(input: {
   testSuiteName: string | null;
   browsers: string[];
   runId?: string;
+  organizationId?: string | null;
 }): BrowserMatrixRunRow {
   const db = getDb();
   const now = Date.now();
   const id = input.runId ?? generateDbId("matrix");
   db.prepare(
     `INSERT INTO browser_matrix_runs
-      (id, user_id, extension_id, package_id, test_suite_id, test_suite_name, browsers_json, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)`,
+      (id, user_id, extension_id, package_id, test_suite_id, test_suite_name, browsers_json, status, created_at, updated_at, organization_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
   ).run(
     id,
     input.userId,
@@ -57,8 +58,15 @@ export function createMatrixRunRow(input: {
     JSON.stringify(input.browsers),
     now,
     now,
+    input.organizationId ?? null,
   );
   return getMatrixRunById(id)!;
+}
+
+/** Phase 10: organization-scoped matrix lookup (API-key paths). */
+export function getOrgMatrixRun(organizationId: string, id: string): BrowserMatrixRunRow | null {
+  const row = getDb().prepare("SELECT * FROM browser_matrix_runs WHERE id = ? AND organization_id = ?").get(id, organizationId);
+  return (row as unknown as BrowserMatrixRunRow | undefined) ?? null;
 }
 
 export function createMatrixExecutionRow(input: {

@@ -9,6 +9,9 @@ import { JobWorker, type WorkerOptions } from "./worker";
 import { Scheduler } from "./scheduler";
 import { createAutomatedTestHandler } from "./handlers/automated-test";
 import { createCleanupHandler } from "./handlers/cleanup";
+import { createWebhookDeliveryHandler } from "./handlers/webhook-delivery";
+import { createOrgExportHandler } from "./handlers/org-export";
+import { getOrganizationEntitlements } from "@/lib/organizations/entitlements";
 import { createEmailHandler } from "./handlers/email";
 
 /**
@@ -32,12 +35,17 @@ export function createWorker(options: WorkerOptions = {}): JobWorker {
         getMaxConcurrentRuns(userId),
         Math.min(getBrowserConcurrency(userId), getBrowserRegistryConfig().limits.maxMatrixConcurrency),
       ),
+    // Phase 10: organization fairness — one organization can never monopolize
+    // the worker fleet while others wait.
+    orgConcurrencyFor: (organizationId) => getOrganizationEntitlements(organizationId).orgMaxConcurrency,
     ...options,
   });
   worker
     .register(createAutomatedTestHandler({ sandboxManager, maxConcurrentRuns: config.sandbox.maxConcurrency }))
     .register(createEmailHandler())
-    .register(createCleanupHandler());
+    .register(createCleanupHandler())
+    .register(createWebhookDeliveryHandler())
+    .register(createOrgExportHandler());
   return worker;
 }
 

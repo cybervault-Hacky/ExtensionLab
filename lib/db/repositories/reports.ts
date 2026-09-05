@@ -30,6 +30,7 @@ export function createReport(input: {
   reportJson: string;
   id?: string;
   createdAt?: number;
+  organizationId?: string | null;
 }): ReportRow {
   const db = getDb();
   const now = input.createdAt ?? Date.now();
@@ -37,8 +38,8 @@ export function createReport(input: {
   db.prepare(
     `INSERT INTO reports
       (id, user_id, extension_id, analysis_snapshot_id, test_run_id, title, summary,
-       health_score, runtime_score, overall_score, report_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       health_score, runtime_score, overall_score, report_json, created_at, updated_at, organization_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.userId,
@@ -53,8 +54,15 @@ export function createReport(input: {
     input.reportJson,
     now,
     now,
+    input.organizationId ?? null,
   );
   return getReportById(id)!;
+}
+
+/** Phase 10: organization-scoped report lookup (API-key paths). */
+export function getOrgReport(organizationId: string, id: string): ReportRow | null {
+  const row = getDb().prepare("SELECT * FROM reports WHERE id = ? AND organization_id = ?").get(id, organizationId);
+  return (row as unknown as ReportRow | undefined) ?? null;
 }
 
 export function getReportById(id: string): ReportRow | null {

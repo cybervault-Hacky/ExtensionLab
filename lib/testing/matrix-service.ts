@@ -11,6 +11,7 @@ import {
   listStaleActiveMatrixRuns,
   type MatrixExecutionStatus,
   type MatrixRunStatus,
+  getOrgMatrixRun,
 } from "@/lib/db/repositories/browser-matrix";
 import { createTestRun, attachJobToTestRun, getTestRunById } from "@/lib/db/repositories/test-runs";
 import { reserveQuota } from "@/lib/db/repositories/quota";
@@ -31,6 +32,7 @@ import { resolveSuite } from "./suites";
 import { createReport } from "@/lib/db/repositories/reports";
 import { redactSensitiveText, redactUrlShallow } from "@/lib/runtime/redact";
 import { AppError } from "@/lib/observability/errors";
+import { dispatchOrganizationEvent } from "@/lib/webhooks/dispatch";
 import { logger, recordMetric } from "@/lib/observability/logger";
 import type { NetworkEntryLike, RuntimeEventLike, TestResult } from "./types";
 import type { ExtensionAnalysis } from "@/types/extension";
@@ -56,6 +58,8 @@ export interface CreateMatrixRunInput {
   testUrl?: string;
   analysis: ExtensionAnalysis;
   idempotencyKey?: string | null;
+  /** Phase 10: owning organization (personal workspace when absent). */
+  organizationId?: string | null;
 }
 
 export interface CreateMatrixRunResult {
@@ -132,6 +136,7 @@ export async function createMatrixRun(input: CreateMatrixRunInput): Promise<Crea
       testSuiteId: resolved.suite.id,
       testSuiteName: resolved.suite.name,
       browsers,
+      ...(input.organizationId ? { organizationId: input.organizationId } : {}),
     });
     const executions: CreateMatrixRunResult["executions"] = [];
     // Per-user browser parallelism, clamped by the deployment-wide matrix
@@ -157,6 +162,7 @@ export async function createMatrixRun(input: CreateMatrixRunInput): Promise<Crea
       const { job } = enqueueJob({
         type: "AUTOMATED_TEST",
         userId: input.userId,
+        organizationId: input.organizationId ?? null,
         payload: {
           runId: run.id,
           packageId: input.packageId,
@@ -367,6 +373,7 @@ export function finalizeMatrixRun(matrixRunId: string): { status: MatrixRunStatu
   if (!reportId) {
     const report = createReport({
       userId: matrix.user_id,
+      ...(matrix.organization_id ? { organizationId: matrix.organization_id } : {}),
       extensionId: matrix.extension_id,
       analysisSnapshotId: null,
       testRunId: null,
@@ -410,6 +417,22 @@ export function finalizeMatrixRun(matrixRunId: string): { status: MatrixRunStatu
   });
 
   recordMetric("matrix.finalized", 1, { status, browsers: requested.join(",") });
+  if (matrix.organization_id) {
+    const terminal = status === "completed";
+    dispatchOrganizationEvent(
+      matrix.organization_id,
+      terminal ? "browser_matrix.completed" : "browser_matrix.failed",
+      { matrixRunId: matrix.id, organizationId: matrix.organization_id, status, compatibilityScore: comparison.compatibility.score },
+    );
+    if (reportId) {
+      dispatchOrganizationEvent(matrix.organization_id, "report.created", {
+        reportId,
+        organizationId: matrix.organization_id,
+        matrixRunId: matrix.id,
+        compatibilityScore: comparison.compatibility.score,
+      });
+    }
+  }
   logger.info("matrix.finalized", {
     matrixRunId: matrix.id,
     status,
@@ -462,6 +485,17 @@ export interface MatrixRunView {
 export function getMatrixRunView(userId: string, matrixRunId: string): MatrixRunView | null {
   const matrix = getOwnedMatrixRun(userId, matrixRunId);
   if (!matrix) return null;
+  return buildMatrixRunView(matrix);
+}
+
+/** Phase 10: organization-scoped view for API-key callers. */
+export function getMatrixRunViewForOrganization(organizationId: string, matrixRunId: string): MatrixRunView | null {
+  const matrix = getOrgMatrixRun(organizationId, matrixRunId);
+  if (!matrix) return null;
+  return buildMatrixRunView(matrix);
+}
+
+function buildMatrixRunView(matrix: import("@/lib/db/schema/types").BrowserMatrixRunRow): MatrixRunView | null {
   let comparison: MatrixComparison | null = null;
   if (matrix.comparison_json) {
     try {

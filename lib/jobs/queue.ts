@@ -16,6 +16,7 @@ import {
   type JobType,
 } from "@/lib/db/repositories/jobs";
 import { getConfig } from "@/lib/config/env";
+import type { JobPriorityClass } from "./types";
 import { AppError, isErrorCode } from "@/lib/observability/errors";
 import { logger, recordMetric } from "@/lib/observability/logger";
 import type { JobPayloadMap, JobView } from "./types";
@@ -26,9 +27,15 @@ import type { JobPayloadMap, JobView } from "./types";
  * requests never block on execution.
  */
 
+export type { JobPriorityClass };
+
 export interface EnqueueOptions<T extends JobType> {
   type: T;
   userId: string | null;
+  /** Phase 10: organization that owns this job (fair scheduling + quotas). */
+  organizationId?: string | null;
+  /** Priority class resolved through config; raw numeric priorities are clamped. */
+  priorityClass?: JobPriorityClass;
   payload: JobPayloadMap[T];
   maxAttempts?: number;
   priority?: number;
@@ -63,12 +70,14 @@ export function enqueueJob<T extends JobType>(options: EnqueueOptions<T>): { job
         });
       }
     }
+    const priority = resolvePriority(options, config);
     const job = insertJob({
       type: options.type,
       userId: options.userId,
+      organizationId: options.organizationId ?? null,
       payload: options.payload as unknown as Record<string, unknown>,
       maxAttempts: options.maxAttempts ?? config.jobs.maxRetries + 1,
-      priority: options.priority,
+      priority,
       idempotencyKey: options.idempotencyKey ?? null,
       resourceType: options.resourceType ?? null,
       resourceId: options.resourceId ?? null,
@@ -80,6 +89,23 @@ export function enqueueJob<T extends JobType>(options: EnqueueOptions<T>): { job
     logger.info("job.enqueued", { jobId: job.id, userId: options.userId ?? undefined, type: options.type });
     return { job, created: true };
   });
+}
+
+/**
+ * Priority classes are fixed by configuration and can never exceed the
+ * configured ceilings — priority never bypasses security, capacity or plan
+ * limits (backpressure checks run regardless).
+ */
+function resolvePriority(options: { priority?: number; priorityClass?: JobPriorityClass }, config: ReturnType<typeof getConfig>): number {
+  const classes = config.jobs10;
+  const byClass: Record<JobPriorityClass, number> = {
+    interactive: classes.priorityInteractive,
+    enterprise: classes.priorityEnterprise,
+    ci: classes.priorityCi,
+    normal: classes.priorityNormal,
+  };
+  const base = options.priorityClass ? byClass[options.priorityClass] : (options.priority ?? classes.priorityNormal);
+  return Math.max(-100, Math.min(100, Math.floor(base)));
 }
 
 export function toJobView(job: JobRow): JobView {

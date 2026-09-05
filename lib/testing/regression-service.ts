@@ -11,6 +11,7 @@ import type { BrowserId } from "@/lib/browsers/types";
 import { buildRegressionComparison, type RegressionComparisonResult, type RegressionRunEvidence } from "./regression";
 import type { NetworkEntryLike, RuntimeEventLike, TestResult } from "./types";
 import { AppError } from "@/lib/observability/errors";
+import { dispatchOrganizationEvent } from "@/lib/webhooks/dispatch";
 import { logger, recordMetric } from "@/lib/observability/logger";
 
 /**
@@ -204,6 +205,18 @@ export function compareForRegression(input: {
     );
     comparisonId = row.id;
   }
+  if (result.aggregate.regressionCount > 0) {
+    const organizationId = resolveOrganizationForComparison(input.current);
+    if (organizationId) {
+      dispatchOrganizationEvent(organizationId, "regression.detected", {
+        organizationId,
+        comparisonId: comparisonId ?? undefined,
+        regressionCount: result.aggregate.regressionCount,
+        currentMatrixRunId: input.current.matrixRunId ?? undefined,
+        currentRunId: input.current.runId ?? undefined,
+      });
+    }
+  }
   recordMetric("regression.compared", 1, { regressions: String(result.aggregate.regressionCount) });
   logger.info("regression.compared", {
     userId: input.userId,
@@ -239,4 +252,22 @@ export function latestFinishedMatrixForExtension(userId: string, extensionId: st
   if (!extensionId) return null;
   const candidates = listCompletedMatrixRunsForExtension(extensionId).filter((row) => row.user_id === userId && row.id !== excludeId);
   return candidates.length > 0 ? { matrixRunId: candidates[0].id } : null;
+}
+
+/** Phase 10: infer the organization owning the "current" side of a comparison. */
+function resolveOrganizationForComparison(side: { runId?: string | null; matrixRunId?: string | null }): string | null {
+  const db = getDb();
+  if (side.matrixRunId) {
+    const row = db.prepare("SELECT organization_id FROM browser_matrix_runs WHERE id = ?").get(side.matrixRunId) as
+      | { organization_id: string | null }
+      | undefined;
+    if (row?.organization_id) return row.organization_id;
+  }
+  if (side.runId) {
+    const row = db.prepare("SELECT organization_id FROM test_runs WHERE id = ?").get(side.runId) as
+      | { organization_id: string | null }
+      | undefined;
+    if (row?.organization_id) return row.organization_id;
+  }
+  return null;
 }

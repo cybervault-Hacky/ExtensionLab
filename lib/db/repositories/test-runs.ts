@@ -60,6 +60,7 @@ export function createTestRun(input: {
   browserVersion?: string | null;
   engine?: string | null;
   matrixRunId?: string | null;
+  organizationId?: string | null;
 }): TestRunRow {
   const db = getDb();
   const now = input.createdAt ?? Date.now();
@@ -67,8 +68,8 @@ export function createTestRun(input: {
   db.prepare(
     `INSERT INTO test_runs
       (id, user_id, extension_id, status, created_at, updated_at, package_id, job_id, stage, total,
-       browser_id, browser_version, engine, matrix_run_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       browser_id, browser_version, engine, matrix_run_id, organization_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.userId,
@@ -84,8 +85,15 @@ export function createTestRun(input: {
     input.browserVersion ?? null,
     input.engine ?? null,
     input.matrixRunId ?? null,
+    input.organizationId ?? null,
   );
   return getTestRunById(id)!;
+}
+
+/** Phase 10: organization-scoped run lookup (API-key paths). */
+export function getOrgTestRun(organizationId: string, id: string): TestRunRow | null {
+  const row = getDb().prepare("SELECT * FROM test_runs WHERE id = ? AND organization_id = ?").get(id, organizationId);
+  return (row as unknown as TestRunRow | undefined) ?? null;
 }
 
 export function updateTestRunStage(id: string, input: { status?: string; stage: string | null; reason?: string | null }): void {

@@ -25,6 +25,7 @@ import {
 } from "@/lib/db/repositories/test-runs";
 import { releaseReservationForResource } from "@/lib/db/repositories/quota";
 import { noteMatrixChildFinished } from "@/lib/testing/matrix-service";
+import { dispatchOrganizationEvent } from "@/lib/webhooks/dispatch";
 import { AppError, classifyError, toErrorCode } from "@/lib/observability/errors";
 import { logger, recordMetric } from "@/lib/observability/logger";
 import { generateSessionToken } from "@/lib/runtime/ids";
@@ -191,6 +192,14 @@ export function createAutomatedTestHandler(deps: AutomatedTestHandlerDeps): JobH
           }
         }
         recordMetric("job.automated_test", 1, { state: info.state, browserId });
+        if (row.organization_id) {
+          const passed = row.outcome === "PASSED" || row.outcome === "WARNING";
+          dispatchOrganizationEvent(
+            row.organization_id,
+            passed ? "test_run.completed" : "test_run.failed",
+            { runId, organizationId: row.organization_id, outcome: row.outcome ?? info.state, score: row.score },
+          );
+        }
 
         // Phase 9: record the detected browser version and, for matrix
         // children, hand the evidence to the matrix aggregator (idempotent).

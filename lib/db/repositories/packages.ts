@@ -35,14 +35,15 @@ export function createPackageRecord(input: {
   version: string | null;
   originalName: string | null;
   id?: string;
+  organizationId?: string | null;
 }): ExtensionPackageRow {
   const db = getDb();
   const now = Date.now();
   const id = input.id ?? generateDbId("pkg");
   db.prepare(
     `INSERT INTO extension_packages
-      (id, user_id, extension_id, storage_key, sha256, size, version, original_name, status, created_at, updated_at, last_used_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'stored', ?, ?, ?)`,
+      (id, user_id, extension_id, storage_key, sha256, size, version, original_name, status, created_at, updated_at, last_used_at, organization_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'stored', ?, ?, ?, ?)`,
   ).run(
     id,
     input.userId,
@@ -54,7 +55,8 @@ export function createPackageRecord(input: {
     input.originalName,
     now,
     now,
-    now,
+    null,
+    input.organizationId ?? null,
   );
   return getPackageById(id)!;
 }
@@ -65,6 +67,14 @@ export function getPackageById(id: string): ExtensionPackageRow | null {
     (db.prepare("SELECT * FROM extension_packages WHERE id = ?").get(id) as ExtensionPackageRow | undefined) ??
     null
   );
+}
+
+/** Phase 10: organization-scoped package lookup (API-key paths). */
+export function getOrgPackage(organizationId: string, id: string): ExtensionPackageRow | null {
+  const row = getDb()
+    .prepare("SELECT * FROM extension_packages WHERE id = ? AND organization_id = ? AND status = 'stored'")
+    .get(id, organizationId);
+  return (row as ExtensionPackageRow | undefined) ?? null;
 }
 
 export function getOwnedPackage(userId: string, id: string): ExtensionPackageRow | null {

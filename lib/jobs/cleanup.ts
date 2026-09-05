@@ -36,6 +36,14 @@ export interface CleanupReport {
   aiResultsDeleted: number;
   /** Phase 9: stale/timed-out matrix runs finalized. */
   staleMatrixRunsFinalized: number;
+  /** Phase 10: due webhook deliveries rescheduled (crash recovery). */
+  webhookDeliveriesSwept: number;
+  /** Phase 10: expired API idempotency records removed. */
+  idempotencyRecordsDeleted: number;
+  /** Phase 10: expired organization exports finalized + artifacts removed. */
+  orgExportsExpired: number;
+  /** Phase 10: audit events past each organization's retention removed. */
+  orgAuditEventsDeleted: number;
 }
 
 /**
@@ -64,6 +72,10 @@ export async function runCleanup(payload: ArtifactCleanupPayload = {}): Promise<
     billingEventsDeleted: 0,
     aiResultsDeleted: 0,
     staleMatrixRunsFinalized: 0,
+    webhookDeliveriesSwept: 0,
+    idempotencyRecordsDeleted: 0,
+    orgExportsExpired: 0,
+    orgAuditEventsDeleted: 0,
   };
 
   if (scope === "all" || scope === "artifacts") {
@@ -157,6 +169,32 @@ export async function runCleanup(payload: ArtifactCleanupPayload = {}): Promise<
       // The event ledger only needs to outlive the provider's retry horizon
       // (days); keep 90 days for audit/troubleshooting.
       report.billingEventsDeleted = deleteOldBillingEvents(now - 90 * 24 * 60 * 60 * 1000);
+    });
+  }
+
+  if (scope === "all" || scope === "organizations") {
+    await step("webhook-deliveries", async () => {
+      const { sweepDueWebhookDeliveries } = await import("@/lib/webhooks/deliver");
+      report.webhookDeliveriesSwept = await sweepDueWebhookDeliveries(50);
+    });
+    await step("idempotency", async () => {
+      const { deleteExpiredIdempotencyRecords } = await import("@/lib/idempotency/service");
+      report.idempotencyRecordsDeleted = deleteExpiredIdempotencyRecords(now);
+    });
+    await step("org-exports", async () => {
+      const { expireExports } = await import("@/lib/organizations/export");
+      report.orgExportsExpired = await expireExports(now);
+    });
+    await step("org-audit-retention", async () => {
+      const { getConfig } = await import("@/lib/config/env");
+      const { listOrganizationsForRetentionSweep, deleteAuditEventsBefore } = await import("@/lib/organizations/repository");
+      const { getOrganizationEntitlements } = await import("@/lib/organizations/entitlements");
+      const baseDays = getConfig().organizations.auditRetentionDays;
+      for (const org of listOrganizationsForRetentionSweep()) {
+        const entitlements = getOrganizationEntitlements(org.id);
+        const days = Math.max(baseDays, entitlements.extendedArtifactRetentionDays ?? 0);
+        report.orgAuditEventsDeleted += deleteAuditEventsBefore(org.id, now - days * 24 * 60 * 60 * 1000);
+      }
     });
   }
 

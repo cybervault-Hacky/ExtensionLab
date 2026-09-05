@@ -22,6 +22,7 @@ import { ExtensionLabError } from "@/lib/extension/errors";
 import { MAX_EXTENSION_SIZE } from "@/lib/extension/limits";
 import { canUploadPackage } from "@/lib/billing/entitlements";
 import { AppError } from "@/lib/observability/errors";
+import { dispatchOrganizationEvent } from "@/lib/webhooks/dispatch";
 import { logger, recordMetric } from "@/lib/observability/logger";
 import type { ExtensionAnalysis } from "@/types/extension";
 import type { ExtensionPackageRow } from "@/lib/db/schema/types";
@@ -46,6 +47,8 @@ export async function storeExtensionPackage(input: {
   bytes: Uint8Array;
   fileName: string;
   extensionId?: string | null;
+  /** Phase 10: owning organization (personal workspace when absent). */
+  organizationId?: string | null;
 }): Promise<StoredPackageResult> {
   if (input.bytes.byteLength === 0) {
     throw new AppError("INVALID_EXTENSION", { message: "The uploaded file is empty." });
@@ -64,6 +67,13 @@ export async function storeExtensionPackage(input: {
     analysis = await analyzeZipBytes(input.bytes, input.fileName);
   } catch (error) {
     if (error instanceof ExtensionLabError) {
+      if (input.organizationId) {
+        dispatchOrganizationEvent(input.organizationId, "analysis.failed", {
+          organizationId: input.organizationId,
+          fileName: input.fileName.slice(0, 120),
+          errorCode: "INVALID_EXTENSION",
+        });
+      }
       throw new AppError("INVALID_EXTENSION", { message: error.message, cause: error });
     }
     throw new AppError("INVALID_EXTENSION", { cause: error });
@@ -96,6 +106,7 @@ export async function storeExtensionPackage(input: {
       createPackageRecord({
         userId: input.userId,
         extensionId: input.extensionId ?? null,
+        organizationId: input.organizationId ?? null,
         storageKey: key,
         sha256,
         size: input.bytes.byteLength,
@@ -118,6 +129,20 @@ export async function storeExtensionPackage(input: {
     durationMs: Date.now() - startedAt,
     result: "ok",
   });
+  if (input.organizationId) {
+    dispatchOrganizationEvent(input.organizationId, "package.created", {
+      packageId: row.id,
+      organizationId: input.organizationId,
+      sha256: row.sha256,
+      version: row.version,
+    });
+    dispatchOrganizationEvent(input.organizationId, "analysis.completed", {
+      packageId: row.id,
+      organizationId: input.organizationId,
+      healthScore: analysis.healthScore.total,
+      issueCount: analysis.issues.length,
+    });
+  }
   return { package: toPackage(row), analysis, reused: false };
 }
 

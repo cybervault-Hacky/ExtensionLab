@@ -3,6 +3,9 @@ import type { ErrorCode } from "@/lib/observability/errors";
 
 export type { JobRow, JobStatus, JobType };
 
+/** Safe priority classes; resolved through configuration, never raw client input. */
+export type JobPriorityClass = "interactive" | "enterprise" | "ci" | "normal";
+
 /** Public job projection (never includes payload secrets, worker ids or hosts). */
 export interface JobView {
   id: string;
@@ -42,7 +45,7 @@ export interface EmailPayload {
 }
 
 export interface ArtifactCleanupPayload {
-  scope?: "all" | "artifacts" | "packages" | "auth" | "jobs" | "billing" | "ai";
+  scope?: "all" | "artifacts" | "packages" | "auth" | "jobs" | "billing" | "ai" | "organizations";
 }
 
 export interface ReportGenerationPayload {
@@ -54,12 +57,23 @@ export interface AnalysisPayload {
   extensionId: string | null;
 }
 
+export interface WebhookDeliveryPayload {
+  deliveryId: string;
+}
+
+export interface OrgExportPayload {
+  exportId: string;
+  organizationId: string;
+}
+
 export type JobPayloadMap = {
   AUTOMATED_TEST: AutomatedTestPayload;
   EMAIL: EmailPayload;
   ARTIFACT_CLEANUP: ArtifactCleanupPayload;
   REPORT_GENERATION: ReportGenerationPayload;
   ANALYSIS: AnalysisPayload;
+  WEBHOOK_DELIVERY: WebhookDeliveryPayload;
+  ORG_EXPORT: OrgExportPayload;
 };
 
 export interface JobContext<T extends JobType = JobType> {

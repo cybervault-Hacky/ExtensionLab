@@ -31,6 +31,7 @@ export interface PasswordResetRow {
 
 export interface ExtensionRow {
   id: string;
+  organization_id?: string | null;
   user_id: string;
   name: string;
   version: string | null;
@@ -57,6 +58,7 @@ export interface AnalysisSnapshotRow {
 
 export interface TestRunRow {
   id: string;
+  organization_id?: string | null;
   user_id: string;
   extension_id: string | null;
   status: string;
@@ -94,6 +96,7 @@ export interface TestRunRow {
 export interface BrowserMatrixRunRow {
   id: string;
   user_id: string;
+  organization_id?: string | null;
   extension_id: string | null;
   package_id: string;
   test_suite_id: string;
@@ -172,6 +175,7 @@ export interface RegressionComparisonRow {
 
 export interface ReportRow {
   id: string;
+  organization_id?: string | null;
   user_id: string;
   extension_id: string | null;
   analysis_snapshot_id: string | null;
@@ -213,6 +217,7 @@ export interface UsageEventRow {
 /** Phase 6 rows. */
 export interface ExtensionPackageRow {
   id: string;
+  organization_id?: string | null;
   user_id: string;
   extension_id: string | null;
   storage_key: string;
@@ -230,6 +235,7 @@ export interface JobRow {
   id: string;
   type: string;
   user_id: string | null;
+  organization_id?: string | null;
   status: string;
   priority: number;
   attempts: number;
@@ -341,6 +347,7 @@ export interface BillingEventRow {
 
 export interface CheckoutSessionRow {
   id: string;
+  organization_id?: string | null;
   user_id: string;
   provider: string;
   provider_session_id: string;
@@ -367,4 +374,175 @@ export interface AIResultRow {
   duration_ms: number;
   created_at: number;
   expires_at: number;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 10: organizations, public API, webhooks, audit
+// ---------------------------------------------------------------------------
+
+export type OrganizationRole = "owner" | "admin" | "developer" | "viewer";
+
+export interface OrganizationRow {
+  id: string;
+  name: string;
+  slug: string;
+  owner_user_id: string;
+  plan_id: string;
+  plan_status: string;
+  provider: string | null;
+  provider_subscription_id: string | null;
+  seats: number;
+  settings_json: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface OrganizationMemberRow {
+  id: string;
+  organization_id: string;
+  user_id: string;
+  role: OrganizationRole;
+  created_at: number;
+}
+
+export interface OrganizationInvitationRow {
+  id: string;
+  organization_id: string;
+  email: string;
+  role: Exclude<OrganizationRole, "owner">;
+  token_hash: string;
+  invited_by: string;
+  expires_at: number;
+  accepted_at: number | null;
+  accepted_by: string | null;
+  revoked_at: number | null;
+  resend_count: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface OrganizationDomainRow {
+  id: string;
+  organization_id: string;
+  domain: string;
+  verification_token: string;
+  verified_at: number | null;
+  verified_by: string | null;
+  created_at: number;
+}
+
+export interface OrganizationSsoConfigRow {
+  id: string;
+  organization_id: string;
+  protocol: "oidc" | "saml";
+  status: "configured" | "enforced";
+  config_json: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface OrganizationApiKeyRow {
+  id: string;
+  organization_id: string;
+  name: string;
+  prefix: string;
+  key_hash: string;
+  scopes_json: string;
+  created_by: string;
+  created_at: number;
+  expires_at: number | null;
+  revoked_at: number | null;
+  last_used_at: number | null;
+}
+
+export interface OrganizationWebhookRow {
+  id: string;
+  organization_id: string;
+  url: string;
+  secret: string;
+  events_json: string;
+  active: number;
+  created_by: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface OrganizationWebhookDeliveryRow {
+  id: string;
+  organization_id: string;
+  webhook_id: string;
+  event_id: string;
+  event_type: string;
+  payload_json: string;
+  status: "pending" | "succeeded" | "failed" | "dead_letter";
+  attempts: number;
+  next_attempt_at: number | null;
+  last_status_code: number | null;
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface OrganizationAuditEventRow {
+  id: string;
+  organization_id: string;
+  actor_user_id: string | null;
+  actor_api_key_id: string | null;
+  action: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  request_id: string | null;
+  ip: string | null;
+  success: number;
+  metadata_json: string;
+  created_at: number;
+}
+
+export interface ApiIdempotencyRecordRow {
+  id: string;
+  owner_type: "user" | "organization";
+  owner_id: string;
+  idempotency_key: string;
+  endpoint: string;
+  request_hash: string;
+  status: "in_flight" | "completed";
+  response_status: number | null;
+  response_json: string | null;
+  created_at: number;
+  completed_at: number | null;
+  expires_at: number;
+}
+
+export interface OrganizationPolicyRow {
+  id: string;
+  organization_id: string;
+  name: string;
+  rules_json: string;
+  created_by: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface OrganizationExportRow {
+  id: string;
+  organization_id: string;
+  requested_by: string;
+  status: "queued" | "running" | "completed" | "failed" | "expired";
+  storage_key: string | null;
+  size: number | null;
+  sha256: string | null;
+  expires_at: number;
+  error: string | null;
+  created_at: number;
+  finished_at: number | null;
+}
+
+export interface ReportPublicationRow {
+  id: string;
+  organization_id: string;
+  report_id: string;
+  slug: string;
+  summary: string | null;
+  created_by: string;
+  created_at: number;
 }

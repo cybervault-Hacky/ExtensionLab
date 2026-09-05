@@ -229,3 +229,40 @@ identifiers surfaced to users in error messages (`Reference: req_xxxxx`).
 - Chromium in the sandbox runs with `--no-sandbox` inside the container
   (container isolation is the boundary); keep the image updated and keep
   `SANDBOX_NETWORK_MODE=restricted` or `none`.
+
+## Multi-tenant isolation (Phase 10)
+
+Organizations add a second ownership axis. The guarantees:
+
+1. **Tenant isolation in the data layer.** Every organization-scoped read
+   (packages, runs, matrices, reports, keys, webhooks, audit, exports,
+   publications) filters by `organization_id`; API-key principals are bound
+   to their key's organization and can never supply or change it via request
+   parameters. Cross-tenant access is indistinguishable from a missing
+   resource (404) — no existence oracle. Proven by
+   `tests/phase10/tenant-isolation.test.ts` and the route tests.
+2. **Server-side RBAC everywhere.** The centralized authorizer
+   (`authorizeOrgAction`) gates every organization operation; UI hiding is
+   cosmetic. Viewers cannot run expensive operations or manage keys and
+   settings.
+3. **API keys fail closed.** Hashed at rest, scope- and role-checked, expiry
+   and revocation enforced at authentication time, never unrestricted.
+4. **Webhooks are untrusted outbound calls.** HTTPS-only destinations with
+   SSRF/private-IP/metadata and all-record DNS checks at registration *and*
+   delivery, no redirects, response bodies never read, HMAC-signed payloads
+   with timestamp + unique event id for replay protection, secrets shown
+   once.
+5. **Public reports are a narrow projection.** Published pages expose scores,
+   browser outcomes and provenance labels only — never organization
+   metadata, source, internal URLs or container ids.
+6. **SSO never fabricates authentication.** The configuration layer routes;
+   assertion validation is a deployment-time provider adapter (see
+   `docs/SSO.md`). Secrets are write-only and masked everywhere.
+7. **No new bypass APIs.** The public v1 API routes through the same
+   entitlement, quota and concurrency services as the dashboard, with
+   additional per-key/org/IP rate limits. The internal admin abstraction is
+   config-gated, strongly authorized and audited, and executes no shell or
+   Docker commands.
+
+Security docs describe a system *designed to support* these properties; they
+make no certification claims.
