@@ -17,6 +17,7 @@ import type {
   SandboxStatus,
 } from "@/types/runtime";
 import type { TestAction } from "@/lib/testing/types";
+import type { BrowserId } from "@/lib/browsers/types";
 import type { ContainerHandle, SandboxDriver } from "./driver";
 import { generateReferenceId, generateSandboxId, generateSessionToken } from "./ids";
 
@@ -24,6 +25,8 @@ interface CreateSandboxInput {
   sourcePath: string;
   testUrl?: string;
   clientIp: string;
+  /** Phase 9: browser runtime for this sandbox (defaults to Chromium). */
+  browserId?: BrowserId;
 }
 
 type EventListener = (event: RuntimeEvent) => void;
@@ -103,6 +106,7 @@ export class SandboxManager {
       status: "preparing",
       testUrl: input.testUrl,
       sourcePath: input.sourcePath,
+      browserId: input.browserId ?? "chromium",
       createdAt: Date.now(),
       expiresAt: Date.now() + this.config.sandboxTtlMs,
       events: [],
@@ -131,7 +135,9 @@ export class SandboxManager {
     this.setStatus(snapshot, "creating", "Creating isolated environment");
     let handle: ContainerHandle;
     try {
-      handle = await this.driver.create(snapshot.sandboxId, snapshot.sourcePath, snapshot.token);
+      handle = await this.driver.create(snapshot.sandboxId, snapshot.sourcePath, snapshot.token, {
+        browserId: snapshot.browserId,
+      });
     } catch (error) {
       const clean = sanitizeError(error instanceof Error ? error.message : "Docker driver failed.");
       this.setStatus(snapshot, "failed", clean.message);
@@ -299,6 +305,20 @@ export class SandboxManager {
 
   private onRuntimeEvent(snapshot: SandboxSnapshot, incoming: RuntimeEvent): void {
     const copy: RuntimeEvent = { ...incoming };
+    if (
+      copy.type === "browser" &&
+      copy.metadata &&
+      typeof copy.metadata.product === "string" &&
+      typeof copy.metadata.version === "string" &&
+      copy.metadata.version.length > 0
+    ) {
+      // Phase 9: record the exact browser version the runner detected.
+      snapshot.browserInfo = {
+        product: String(copy.metadata.product).slice(0, 64),
+        version: String(copy.metadata.version).slice(0, 32),
+      };
+      snapshot.browserVersion = snapshot.browserInfo.version;
+    }
     if (copy.type === "network") {
       const entry: NetworkEntry = {
         id: copy.id,
@@ -404,12 +424,18 @@ export class SandboxManager {
 
   private toPublicInfo(snapshot: SandboxSnapshot): SandboxInfo {
     const extension = snapshot.extension;
+    const browserProduct = snapshot.browserInfo?.product
+      ?? (snapshot.browserId === "firefox"
+        ? "Firefox"
+        : snapshot.browserId === "edge"
+          ? "Microsoft Edge"
+          : "Chromium");
     const info: SandboxInfo = {
       sandboxId: snapshot.sandboxId,
       status: snapshot.status,
       browser: {
-        product: "Chromium",
-        version: "isolated-container",
+        product: browserProduct,
+        version: snapshot.browserInfo?.version ?? "isolated-container",
         state: RUNNING_STATUSES.includes(snapshot.status) ? "running" : "stopped",
       },
       testUrl: snapshot.testUrl,

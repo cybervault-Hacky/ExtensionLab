@@ -12,13 +12,17 @@ artifact retention and hardened container images. Phase 7 makes it a
 commercial SaaS: Free / Pro / Business plans, hosted checkout, provider
 subscriptions, webhook-driven entitlements, per-period usage limits, billing
 portal and invoices — with billing fully decoupled from the product. Phase 8
-(current) adds an optional, explainable AI assistance layer: on-demand
-explanations of findings, test failures and runtime errors, report summaries,
-validated test suggestions and scoped questions about a report — always
-labelled as AI interpretation next to the deterministic, verified results.
+adds an optional, explainable AI assistance layer: on-demand explanations of
+findings, test failures and runtime errors, report summaries, validated test
+suggestions and scoped questions about a report — always labelled as AI
+interpretation next to the deterministic, verified results. Phase 9 (current)
+extends the same engine to a multi-browser platform: Chromium, Microsoft Edge
+and Firefox run from per-browser pinned sandbox images through a small
+runtime-adapter layer, with deterministic capability gating, browser matrix
+runs, cross-browser comparison, baselines and regression detection.
 See [Phase 6](#phase-6-production-infrastructure--commercial-readiness),
 [Phase 7](#phase-7-plans-billing--entitlements),
-[Phase 8](#phase-8-ai-assistance) and `docs/`.
+[Phase 8](#phase-8-ai-assistance), [BROWSERS](docs/BROWSERS.md) and `docs/`.
 
 **Phase 1 does not execute extensions.** It performs:
 
@@ -138,7 +142,14 @@ redaction and prompt-injection fixtures asserted on the prompts the provider
 mock received, context allowlisting/minimization, strict output validation
 and evidence filtering, test-suggestion safety, plan/quota/ownership/share
 rules on all six AI routes, retention, deletion and bundle hygiene. No test
-calls a real AI provider.
+calls a real AI provider; and, for Phase 9 (`tests/phase9/`): the browser
+registry and capability model, entitlement- and quota-gated matrix creation
+(atomic, one unit per browser), PARTIAL/infrastructure semantics, the
+deterministic comparison and regression rules (`FAIL → FAIL` never counts),
+static compatibility analysis, the browser/matrix/regression APIs with
+ownership checks, per-browser container hardening and public-view
+sanitization. The Docker E2E adds a real cross-browser matrix, regression
+A/B and quota/billing flows (`tests/e2e/cross-browser.e2e.test.ts`).
 
 Phase 1 coverage:
 
@@ -306,11 +317,20 @@ pull requests it will:
   catalog, provider-agnostic checkout and subscriptions, signed webhooks,
   server-side entitlement service, billing-period usage limits, portal,
   invoices, paywall UX and account-deletion cancellation.
-- **Phase 8 (current):** AI assistance — provider abstraction with one
+- **Phase 8 (implemented):** AI assistance — provider abstraction with one
   OpenAI-compatible adapter and a deterministic fake, redacted and
   allowlisted evidence contexts, strict output validation with evidence
   links, validated test suggestions, plan-gated quotas and an on-demand UI
   that keeps AI interpretation visibly separate from verified results.
+- **Phase 9 (current):** Multi-browser platform — Chromium/Edge/Firefox
+  runtime adapters on per-browser pinned images with identical sandbox
+  hardening, capability-aware test gating (unsupported → SKIPPED, never
+  FAILED), browser matrix runs with honest PARTIAL semantics and
+  infrastructure-vs-extension failure separation, deterministic
+  cross-browser comparison with evidence-based findings, static
+  manifest/API compatibility notes, baselines and regression comparison,
+  browser-aware UI (selector, matrix run view, comparison table, regression
+  page, history filters). See [docs/BROWSERS.md](docs/BROWSERS.md).
 - **Later phases (planned):** Team collaboration and cloud managed history.
 
 ## Phase 4: Automated Testing & Runtime Diagnostics
@@ -667,7 +687,9 @@ Upload → Validate → Store package → Queue job → Worker → Docker sandbo
 | `npm run db:migrate` / `npm run db:migrate:status` | Apply / inspect migrations |
 | `npm run cleanup` | Run retention cleanup on demand |
 | `npm run test:e2e` | Real-Docker end-to-end suite |
-| `npm run sandbox:build` | Build the pinned sandbox image |
+| `npm run sandbox:build` | Build the pinned sandbox image (Chromium) |
+| `npm run sandbox:build:chromium` / `:edge` / `:firefox` | Build a dedicated per-browser image |
+| `npm run sandbox:build:matrix` | Build all three per-browser images |
 
 ### Documentation
 
@@ -676,6 +698,8 @@ Upload → Validate → Store package → Queue job → Worker → Docker sandbo
 - `docs/ARCHITECTURE.md` — request/job/sandbox flows and data model.
 - `docs/SECURITY.md` — trust boundaries, container hardening, CSP, logging.
 - `docs/OPERATIONS.md` — runbooks: worker, cleanup, E2E, troubleshooting.
+- `docs/BROWSERS.md` — multi-browser platform: runtimes, capabilities,
+  matrices, comparison, baselines and regression.
 
 ## Phase 7: Plans, Billing & Entitlements
 

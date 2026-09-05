@@ -12,6 +12,7 @@ import {
   parseManifestJson,
 } from "./manifest";
 import { analyzePermissions } from "./permissions";
+import { analyzeBrowserCompatibility } from "./browser-compat";
 import type {
   AnalysisStep,
   AnalyzerIssue,
@@ -409,6 +410,26 @@ export async function analyzeZipBytes(
 
   reportStep("report", onProgress, onProgressRatio);
 
+  // Phase 9: static browser-compatibility notes (additive, informational).
+  const sourcePaths = fileEntries
+    .filter((entry) => /\.(js|mjs|cjs)$/i.test(entry.path) && entry.size <= 512 * 1024)
+    .map((entry) => entry.path);
+  const browserCompatibility = await analyzeBrowserCompatibility({
+    manifest,
+    manifestRaw,
+    permissions,
+    sourcePaths,
+    readSource: async (path) => {
+      const object = zip.file(path);
+      if (!object) return null;
+      try {
+        return await object.async("string");
+      } catch {
+        return null;
+      }
+    },
+  });
+
   return {
     createdAt: Date.now(),
     sourceName,
@@ -427,6 +448,7 @@ export async function analyzeZipBytes(
     files,
     issues,
     healthScore,
+    browserCompatibility,
   };
 }
 

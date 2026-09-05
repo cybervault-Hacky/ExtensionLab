@@ -131,6 +131,13 @@ export interface AssertionOutcome {
   assertion: TestAssertion;
   passed: boolean;
   message: string;
+  /**
+   * Phase 9: the assertion was not evaluated because the browser runtime does
+   * not support a capability it depends on. Skipped assertions never count as
+   * extension failures.
+   */
+  skipped?: boolean;
+  skipReason?: string;
 }
 
 export interface TestResult {
@@ -149,6 +156,9 @@ export interface TestResult {
   warnings: string[];
   skippedReason?: string;
   runId?: string;
+  /** Phase 9: browser runtime this result was produced on. */
+  browserId?: string;
+  browserVersion?: string;
 }
 
 export interface TestCaseInput {
@@ -162,6 +172,12 @@ export interface TestCaseInput {
   assertions: TestAssertion[];
   applicable: (context: TestDiscoveryContext) => boolean;
   skipReason?: string;
+  /**
+   * Phase 9: explicit, bounded test dependencies. A test whose dependency did
+   * not pass is skipped (never silently dropped). Dependencies must reference
+   * tests in the same suite; cycles and long chains are rejected at build time.
+   */
+  dependsOn?: string[];
 }
 
 export interface TestCase extends Omit<TestCaseInput, "applicable"> {
@@ -221,6 +237,10 @@ export interface TestRunInfo {
   errorCode?: string;
   /** Phase 6: background job id (safe to expose; non-guessable). */
   jobId?: string;
+  /** Phase 9: browser runtime metadata (absent on legacy Chromium-only runs). */
+  browserId?: string;
+  browserVersion?: string;
+  engine?: string;
 }
 
 export interface CapturedScreenshot {
@@ -237,6 +257,12 @@ export interface TestRunSnapshot {
   sandboxToken?: string;
   sourcePath: string;
   testUrl?: string;
+  /** Phase 9: browser runtime for this run (defaults to Chromium). */
+  browserId?: string;
+  /** Phase 9: runtime-detected browser version. */
+  browserVersion?: string;
+  /** Phase 9: discovery context captured at creation (for per-browser skips). */
+  discovery?: TestDiscoveryContext;
   tests?: TestCase[];
   state: TestRunState;
   createdAt: number;

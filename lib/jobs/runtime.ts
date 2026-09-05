@@ -1,6 +1,7 @@
 import "server-only";
 import { getConfig } from "@/lib/config/env";
-import { getMaxConcurrentRuns } from "@/lib/billing/entitlements";
+import { getBrowserConcurrency, getMaxConcurrentRuns } from "@/lib/billing/entitlements";
+import { getBrowserRegistryConfig } from "@/lib/browsers/registry";
 import { getSandboxManager } from "@/lib/runtime/sandbox-manager-instance";
 import { probeSandboxEnvironment } from "@/lib/runtime/availability";
 import { logger } from "@/lib/observability/logger";
@@ -22,8 +23,15 @@ export function createWorker(options: WorkerOptions = {}): JobWorker {
       const probe = await probeSandboxEnvironment();
       return { available: probe.available, detail: probe.available ? undefined : probe.reason };
     },
-    // Paid plans may run more jobs at once; SANDBOX_USER_CONCURRENCY is the floor.
-    userConcurrencyFor: (userId) => getMaxConcurrentRuns(userId),
+    // Paid plans may run more jobs at once; SANDBOX_USER_CONCURRENCY is the
+    // floor. Phase 9: browser executions (matrix children) are admitted under
+    // the plan's browser concurrency when it is higher, clamped by the
+    // deployment-wide MAX_MATRIX_CONCURRENCY ceiling.
+    userConcurrencyFor: (userId) =>
+      Math.max(
+        getMaxConcurrentRuns(userId),
+        Math.min(getBrowserConcurrency(userId), getBrowserRegistryConfig().limits.maxMatrixConcurrency),
+      ),
     ...options,
   });
   worker

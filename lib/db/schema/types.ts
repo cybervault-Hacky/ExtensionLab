@@ -83,6 +83,91 @@ export interface TestRunRow {
   error_code?: string | null;
   reason?: string | null;
   access_token_hash?: string | null;
+  /** Phase 9 additions (null on pre-Phase-9 rows, which were Chromium-only). */
+  browser_id?: string | null;
+  browser_version?: string | null;
+  engine?: string | null;
+  matrix_run_id?: string | null;
+}
+
+/** Phase 9: browser matrix run (parent of per-browser child executions). */
+export interface BrowserMatrixRunRow {
+  id: string;
+  user_id: string;
+  extension_id: string | null;
+  package_id: string;
+  test_suite_id: string;
+  test_suite_name: string | null;
+  browsers_json: string;
+  status: string;
+  compatibility_score: number | null;
+  coverage: number | null;
+  comparison_json: string | null;
+  report_id: string | null;
+  reason: string | null;
+  created_at: number;
+  updated_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+}
+
+/** Phase 9: one child execution of a matrix run in a single browser. */
+export interface BrowserMatrixExecutionRow {
+  id: string;
+  matrix_run_id: string;
+  browser_id: string;
+  browser_version: string | null;
+  engine: string | null;
+  test_run_id: string;
+  job_id: string | null;
+  status: string;
+  outcome: string | null;
+  error_code: string | null;
+  reason: string | null;
+  score: number | null;
+  passed: number;
+  failed: number;
+  skipped: number;
+  evidence_json: string | null;
+  created_at: number;
+  updated_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+}
+
+/** Phase 9: designated baseline (exact versions, never "latest"). */
+export interface TestBaselineRow {
+  id: string;
+  user_id: string;
+  extension_id: string;
+  package_id: string;
+  snapshot_id: string | null;
+  test_suite_id: string;
+  browsers_json: string;
+  matrix_run_id: string | null;
+  run_id: string | null;
+  score: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Phase 9: stored regression comparison between two runs/matrices. */
+export interface RegressionComparisonRow {
+  id: string;
+  user_id: string;
+  extension_id: string | null;
+  package_version_id_prev: string | null;
+  package_version_id_current: string | null;
+  test_suite_id: string | null;
+  browsers_json: string;
+  previous_matrix_run_id: string | null;
+  current_matrix_run_id: string | null;
+  previous_run_id: string | null;
+  current_run_id: string | null;
+  result_json: string;
+  regression_count: number;
+  improvement_count: number;
+  created_at: number;
 }
 
 export interface ReportRow {

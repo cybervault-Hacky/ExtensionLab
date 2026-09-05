@@ -34,6 +34,8 @@ export interface CleanupReport {
   staleCheckoutsExpired: number;
   billingEventsDeleted: number;
   aiResultsDeleted: number;
+  /** Phase 9: stale/timed-out matrix runs finalized. */
+  staleMatrixRunsFinalized: number;
 }
 
 /**
@@ -61,12 +63,20 @@ export async function runCleanup(payload: ArtifactCleanupPayload = {}): Promise<
     staleCheckoutsExpired: 0,
     billingEventsDeleted: 0,
     aiResultsDeleted: 0,
+    staleMatrixRunsFinalized: 0,
   };
 
   if (scope === "all" || scope === "artifacts") {
     await step("artifacts", async () => {
       const { deleteExpiredArtifacts } = await import("@/lib/artifacts/service");
       report.expiredArtifacts = await deleteExpiredArtifacts(now);
+    });
+  }
+
+  if (scope === "all" || scope === "jobs") {
+    await step("matrix-sweep", async () => {
+      const { sweepStaleMatrixRuns } = await import("@/lib/testing/matrix-service");
+      report.staleMatrixRunsFinalized = sweepStaleMatrixRuns(now);
     });
   }
 

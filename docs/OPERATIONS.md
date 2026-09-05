@@ -178,6 +178,39 @@ The suite (`tests/e2e/docker-runtime.e2e.test.ts`) uses the real worker,
 6. Live `docker inspect` of a sandbox: non-root, read-only rootfs,
    `CapDrop ALL`, `no-new-privileges`, no binds, PID/memory limits.
 
+For cross-browser (Phase 9), build the per-browser images and run:
+
+```bash
+npm run sandbox:build:matrix
+npm run test:e2e          # includes tests/e2e/cross-browser.e2e.test.ts
+```
+
+That suite runs a real matrix (one disposable container per browser, exact
+browser versions recorded, deterministic comparison and report), verifies
+fail-closed behavior when an image is missing, quota atomicity
+(N browsers = N test-run units), the billing gate + clean cancellation, and
+the regression A/B flow (v1.0.0 passes → v2.0.0 fails → PASS→FAIL reported,
+`FAIL → FAIL` never invented). Without Docker both E2E suites skip with an
+explicit reason; with `EXTENSIONLAB_E2E_DOCKER=1` a missing daemon or image
+is a hard failure — browser results are never faked.
+
+## Browser runtimes and matrices (Phase 9)
+
+- `GET /api/browsers` shows per-runtime availability; the underlying probe
+  checks Docker reachability and each pinned image (10 s cache). An
+  unavailable runtime makes matrix creation fail with
+  `BROWSER_RUNTIME_UNAVAILABLE` **before** anything is queued or charged.
+- Stale matrices are finalized by the `matrix-sweep` cleanup job and a
+  read-path sweep (grace `MATRIX_TIMEOUT_MS`): cancelled children, preserved
+  results, one immutable cross-browser report per matrix.
+- Metrics: `matrix.created`, `matrix.execution_finished`,
+  `matrix.finalized`, `matrix.cancelled` (tags include browser ids and
+  status). Log events carry `matrixRunId`, `browserId`, `browserVersion`.
+- Quota policy is deterministic: **one test-run unit per browser execution**
+  (suite × 3 browsers = 3 units). A rejected matrix reserves nothing.
+
+Details: [BROWSERS.md](BROWSERS.md).
+
 Without Docker the suite **skips with an explicit reason**; it never passes
 by pretending. Set `EXTENSIONLAB_E2E_DOCKER=1` (as CI does) to turn a missing
 Docker into a failure. `E2E_LOG_LEVEL=info` shows worker logs while debugging.
@@ -228,6 +261,17 @@ Full reference in [AI.md](AI.md); operational summary:
 - **Data requests:** stored AI results are per user (`ai_results`), deleted
   by retention and by account deletion; prompts and raw responses are not
   stored, so there is nothing else to export or purge.
+
+## Troubleshooting (browsers)
+
+- `BROWSER_RUNTIME_UNAVAILABLE` on matrix creation → the pinned image is
+  missing on that host: run `npm run sandbox:build:matrix` (or disable the
+  runtime with `BROWSER_<ID>_ENABLED=0`).
+- Matrix stuck in `running` → check the worker logs for `matrix.execution_finished`
+  events; the sweep finalizes it after `MATRIX_TIMEOUT_MS`.
+- A browser shows `skipped` with `INFRASTRUCTURE_ERROR` → infrastructure
+  failure, not an extension failure: the compatibility score intentionally
+  excludes it and reports insufficient data instead.
 
 ## Troubleshooting
 

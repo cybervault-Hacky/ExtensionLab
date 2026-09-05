@@ -27,6 +27,10 @@ export interface AutomatedTestPayload {
   /** Only the ids of the discovered tests; the registry is deterministic. */
   testIds: string[];
   reservationId: string | null;
+  /** Phase 9: browser runtime for this execution (absent = Chromium, legacy jobs). */
+  browserId?: string;
+  /** Phase 9: parent matrix linkage, when this run belongs to a browser matrix. */
+  matrixRunId?: string;
 }
 
 export interface EmailPayload {

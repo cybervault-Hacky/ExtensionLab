@@ -61,6 +61,8 @@ export interface PlanView {
     testRunLimit: number;
     maxExtensionSize: number;
     maxConcurrentRuns: number;
+    browserConcurrency: number;
+    maxBrowsersPerRun: number;
     historyRetentionDays: number;
     artifactRetentionDays: number;
     packageRetentionDays: number;
@@ -72,6 +74,9 @@ export interface PlanView {
     advancedDiagnostics: boolean;
     priorityExecution: boolean;
     aiEnabled: boolean;
+    crossBrowserEnabled: boolean;
+    regressionTesting: boolean;
+    advancedSuites: boolean;
   };
 }
 
@@ -90,6 +95,8 @@ export function toPlanView(plan: Plan, formatted: string): PlanView {
       testRunLimit: plan.testRunLimit,
       maxExtensionSize: plan.maxExtensionSize,
       maxConcurrentRuns: plan.maxConcurrentRuns,
+      browserConcurrency: plan.browserConcurrency,
+      maxBrowsersPerRun: plan.maxBrowsersPerRun,
       historyRetentionDays: plan.historyRetentionDays,
       artifactRetentionDays: plan.artifactRetentionDays,
       packageRetentionDays: plan.packageRetentionDays,
@@ -101,6 +108,9 @@ export function toPlanView(plan: Plan, formatted: string): PlanView {
       advancedDiagnostics: plan.advancedDiagnostics,
       priorityExecution: plan.priorityExecution,
       aiEnabled: plan.aiEnabled && plan.aiRequestLimit > 0,
+      crossBrowserEnabled: plan.crossBrowserEnabled,
+      regressionTesting: plan.regressionTesting,
+      advancedSuites: plan.advancedSuites,
     },
   };
 }

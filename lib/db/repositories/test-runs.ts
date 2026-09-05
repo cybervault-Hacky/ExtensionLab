@@ -56,14 +56,19 @@ export function createTestRun(input: {
   jobId?: string | null;
   stage?: string | null;
   total?: number;
+  browserId?: string | null;
+  browserVersion?: string | null;
+  engine?: string | null;
+  matrixRunId?: string | null;
 }): TestRunRow {
   const db = getDb();
   const now = input.createdAt ?? Date.now();
   const id = input.runId ?? generateDbId("run");
   db.prepare(
     `INSERT INTO test_runs
-      (id, user_id, extension_id, status, created_at, updated_at, package_id, job_id, stage, total)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, user_id, extension_id, status, created_at, updated_at, package_id, job_id, stage, total,
+       browser_id, browser_version, engine, matrix_run_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.userId,
@@ -75,6 +80,10 @@ export function createTestRun(input: {
     input.jobId ?? null,
     input.stage ?? null,
     input.total ?? 0,
+    input.browserId ?? null,
+    input.browserVersion ?? null,
+    input.engine ?? null,
+    input.matrixRunId ?? null,
   );
   return getTestRunById(id)!;
 }
@@ -165,6 +174,10 @@ export function toTestRunListItem(row: TestRunWithExtension): Record<string, unk
     created_at: row.created_at,
     extensionName: row.extensionName ?? null,
     extensionVersion: row.extensionVersion ?? null,
+    browserId: row.browser_id ?? null,
+    browserVersion: row.browser_version ?? null,
+    engine: row.engine ?? null,
+    matrixRunId: row.matrix_run_id ?? null,
   };
 }
 
@@ -241,6 +254,13 @@ export function updateTestRunStatus(id: string, status: string): void {
   );
 }
 
+/** Records the runtime-detected browser version for reproducibility (Phase 9). */
+export function updateTestRunBrowser(id: string, browserVersion: string): void {
+  getDb()
+    .prepare("UPDATE test_runs SET browser_version = ?, updated_at = ? WHERE id = ?")
+    .run(browserVersion, Date.now(), id);
+}
+
 export function updateTestRunStarted(id: string): void {
   const db = getDb();
   db.prepare(
@@ -299,7 +319,7 @@ export function saveTestRunFinal(input: {
 
 export function listTestRuns(
   userId: string,
-  input: { page: number; limit: number; filter?: TestRunFilter; search?: string },
+  input: { page: number; limit: number; filter?: TestRunFilter; search?: string; browserId?: string; matrixRunId?: string },
 ): { items: TestRunWithExtension[]; total: number } {
   const db = getDb();
   const where: string[] = ["r.user_id = ?"];
@@ -325,6 +345,19 @@ export function listTestRuns(
     const term = `%${input.search.trim()}%`;
     where.push("(e.name LIKE ? OR r.id LIKE ?)");
     params.push(term, term);
+  }
+  if (input.browserId) {
+    // Phase 9 browser filter; pre-Phase-9 rows (null browser) count as Chromium.
+    if (input.browserId === "chromium") {
+      where.push("(r.browser_id = ? OR r.browser_id IS NULL)");
+    } else {
+      where.push("r.browser_id = ?");
+    }
+    params.push(input.browserId);
+  }
+  if (input.matrixRunId) {
+    where.push("r.matrix_run_id = ?");
+    params.push(input.matrixRunId);
   }
   const whereSql = `WHERE ${where.join(" AND ")}`;
   const total = (

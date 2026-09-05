@@ -34,12 +34,21 @@ interface RunItem {
   created_at: number;
   extensionName: string | null;
   extensionVersion: string | null;
+  browserId?: string | null;
+  browserVersion?: string | null;
+  matrixRunId?: string | null;
+}
+
+function browserLabel(browserId: string | null | undefined): string {
+  if (!browserId) return "Chromium";
+  return browserId.charAt(0).toUpperCase() + browserId.slice(1);
 }
 
 export function TestsList() {
   const [items, setItems] = useState<RunItem[]>([]);
   const [filter, setFilter] = useState<FilterKey>("all");
   const [search, setSearch] = useState("");
+  const [browser, setBrowser] = useState<"" | "chromium" | "edge" | "firefox">("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,6 +57,7 @@ export function TestsList() {
     setError(null);
     const params = new URLSearchParams({ page: "1", limit: "50", status: filter });
     if (search.trim()) params.set("q", search.trim());
+    if (browser) params.set("browser", browser);
     const response = await fetch(`/api/tests?${params.toString()}`);
     if (!response.ok) {
       setError("Unable to load test history.");
@@ -57,7 +67,7 @@ export function TestsList() {
     const data = (await response.json()) as { items: RunItem[] };
     setItems(data.items);
     setLoading(false);
-  }, [filter, search]);
+  }, [filter, search, browser]);
 
   useEffect(() => {
     const timer = setTimeout(() => void load(), 180);
@@ -91,15 +101,29 @@ export function TestsList() {
             </button>
           ))}
         </div>
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-[var(--text-secondary)]" aria-hidden="true" />
-          <input
-            aria-label="Search test runs"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search test runs…"
-            className="min-h-[44px] min-w-[220px] rounded-xl border border-[var(--border)] bg-[var(--surface-secondary)] pl-9 pr-3 text-sm outline-none focus:border-[var(--accent)]"
-          />
+        <div className="flex flex-wrap items-center gap-3">
+          <label htmlFor="browser-filter" className="sr-only">Filter by browser</label>
+          <select
+            id="browser-filter"
+            value={browser}
+            onChange={(event) => setBrowser(event.target.value as "" | "chromium" | "edge" | "firefox")}
+            className="min-h-[44px] rounded-xl border border-[var(--border)] bg-[var(--surface-secondary)] px-3 text-sm outline-none focus:border-[var(--accent)]"
+          >
+            <option value="">All browsers</option>
+            <option value="chromium">Chromium</option>
+            <option value="edge">Edge</option>
+            <option value="firefox">Firefox</option>
+          </select>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-[var(--text-secondary)]" aria-hidden="true" />
+            <input
+              aria-label="Search test runs"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search test runs…"
+              className="min-h-[44px] min-w-[220px] rounded-xl border border-[var(--border)] bg-[var(--surface-secondary)] pl-9 pr-3 text-sm outline-none focus:border-[var(--accent)]"
+            />
+          </div>
         </div>
       </div>
 
@@ -150,7 +174,9 @@ export function TestsList() {
                   <span className="block truncate text-sm font-medium">{item.extensionName ?? "Extension"}</span>
                   <span className="block truncate text-xs text-[var(--text-secondary)]">
                     {item.extensionVersion ? `v${item.extensionVersion} · ` : ""}
-                    {relativeTime(item.created_at)}
+                    {browserLabel(item.browserId)}
+                    {item.browserVersion ? ` ${item.browserVersion}` : ""}
+                    {item.matrixRunId ? " · matrix" : ""} · {relativeTime(item.created_at)}
                   </span>
                 </span>
                 <span className="col-span-2 text-sm font-semibold">{runScoreLabel(item)}</span>

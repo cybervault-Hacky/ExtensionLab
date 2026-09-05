@@ -4,6 +4,9 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { getSandboxConfig } from "@/lib/runtime/config";
 import { probeSandboxEnvironment, type SandboxProbeResult } from "@/lib/runtime/availability";
+import { getBrowserRuntimesHealth } from "@/lib/browsers/availability";
+import { getBrowserRegistryConfig } from "@/lib/browsers/registry";
+import { isBrowserId, type BrowserId } from "@/lib/browsers/types";
 import { extractZipToDirectory } from "@/lib/runtime/extract";
 import type { SandboxManager } from "@/lib/runtime/sandbox-manager";
 import { TestRunManager } from "@/lib/testing/test-runner";
@@ -17,9 +20,11 @@ import {
   finalizeTestRunWithoutResults,
   getTestRunById,
   requeueTestRunForRetry,
+  updateTestRunBrowser,
   updateTestRunStage,
 } from "@/lib/db/repositories/test-runs";
 import { releaseReservationForResource } from "@/lib/db/repositories/quota";
+import { noteMatrixChildFinished } from "@/lib/testing/matrix-service";
 import { AppError, classifyError, toErrorCode } from "@/lib/observability/errors";
 import { logger, recordMetric } from "@/lib/observability/logger";
 import { generateSessionToken } from "@/lib/runtime/ids";
@@ -80,6 +85,21 @@ export function createAutomatedTestHandler(deps: AutomatedTestHandlerDeps): JobH
           throw new AppError("SANDBOX_UNAVAILABLE", { retryable: !permanent });
         }
 
+        // Phase 9: verify the specific browser runtime image before creating a
+        // doomed container. Missing images are permanent for this host (no
+        // retry); an unreachable daemon stays retryable via the probe above.
+        const browserId: BrowserId = isBrowserId(payload.browserId) ? payload.browserId : "chromium";
+        if (browserId !== "chromium") {
+          const browserHealth = await getBrowserRuntimesHealth();
+          if (!browserHealth[browserId]?.available) {
+            const reason = browserHealth[browserId]?.reason ?? "image_missing";
+            throw new AppError("BROWSER_RUNTIME_UNAVAILABLE", {
+              retryable: reason === "docker_unavailable",
+              message: `The ${browserId} runtime image is not available on this deployment.`,
+            });
+          }
+        }
+
         const { bytes, row: pkg } = await readPackageBytes(payload.packageId);
         if (pkg.user_id !== row.user_id) throw new AppError("FORBIDDEN");
 
@@ -135,6 +155,7 @@ export function createAutomatedTestHandler(deps: AutomatedTestHandlerDeps): JobH
           runId,
           token,
           trusted: true,
+          browser: browserId,
         });
         activeRuns.set(job.id, { manager, runId, token });
 
@@ -162,13 +183,39 @@ export function createAutomatedTestHandler(deps: AutomatedTestHandlerDeps): JobH
               screenshots: snapshot.screenshots ?? [],
               runtimeEvents: snapshot.runtimeEvents ?? [],
               network: snapshot.network ?? [],
+              ...(payload.matrixRunId ? { maxScreenshots: getBrowserRegistryConfig().limits.maxMatrixArtifacts } : {}),
             });
             logger.info("test_run.artifacts", { runId, jobId: job.id, count: artifacts.length });
           } catch (error) {
             logger.warn("test_run.artifacts_failed", { runId, jobId: job.id, errorCode: classifyError(error).code });
           }
         }
-        recordMetric("job.automated_test", 1, { state: info.state });
+        recordMetric("job.automated_test", 1, { state: info.state, browserId });
+
+        // Phase 9: record the detected browser version and, for matrix
+        // children, hand the evidence to the matrix aggregator (idempotent).
+        if (snapshot.browserVersion) {
+          try {
+            updateTestRunBrowser(runId, snapshot.browserVersion);
+          } catch {
+            // Best-effort reproducibility metadata.
+          }
+        }
+        if (payload.matrixRunId) {
+          try {
+            noteMatrixChildFinished(runId, {
+              consoleEvents: snapshot.runtimeEvents ?? [],
+              network: snapshot.network ?? [],
+              screenshotCount: (snapshot.screenshots ?? []).length,
+            });
+          } catch (error) {
+            logger.warn("matrix.child_finish_failed", {
+              runId,
+              matrixRunId: payload.matrixRunId,
+              errorCode: classifyError(error).code,
+            });
+          }
+        }
 
         if (info.state === "failed" && info.errorCode !== "EXTENSION_LOAD_FAILED") {
           // Infrastructure failure. With attempts left and a transient cause the

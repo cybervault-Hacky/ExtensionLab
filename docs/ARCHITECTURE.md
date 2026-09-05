@@ -2,8 +2,9 @@
 
 ExtensionLab is a Next.js 15 / React 19 application with a Node.js worker,
 SQLite (`node:sqlite`), a filesystem storage provider and Docker-isolated
-Chromium sandboxes. This document describes the Phase 6 production
-architecture and how it composes the earlier phases without replacing them.
+browser sandboxes (Chromium, Microsoft Edge, Firefox — Phase 9). This
+document describes the production architecture and how each phase composes
+the previous ones without replacing them.
 
 ## Components
 
@@ -12,7 +13,8 @@ architecture and how it composes the earlier phases without replacing them.
 | Web (Next.js) | `app/`, `components/`, `middleware.ts` | UI, REST/SSE API, auth, CSP, rate limits, enqueueing jobs |
 | Worker | `scripts/worker.ts`, `lib/jobs/` | Claims jobs, runs automated tests in Docker, sends e-mail, cleanup |
 | Analyzer (Phase 1/2) | `lib/extension/` | ZIP validation and static analysis — never executes code |
-| Sandbox (Phase 3) | `lib/runtime/`, `sandbox/` | `SandboxManager` + Docker driver + in-container runner (CDP) |
+| Sandbox (Phase 3) | `lib/runtime/`, `sandbox/` | `SandboxManager` + Docker driver + in-container runner; per-browser adapters (Phase 9) |
+| Browsers (Phase 9) | `lib/browsers/`, `sandbox/runner/browsers/` | Browser registry, capabilities, availability, matrix runs, comparison |
 | Test engine (Phase 4) | `lib/testing/` | Deterministic test registry, actions, assertions, scoring, diagnostics |
 | Workspace (Phase 5) | `lib/db/`, `lib/auth/` | Users, sessions, extensions, snapshots, runs, reports, shares, usage |
 | Storage | `lib/storage/` | Opaque-key blob storage for packages and artifacts |
@@ -186,6 +188,46 @@ POST /api/ai/* → session → AI rate limit → provider configured → canUseA
 
 Details: [AI.md](AI.md).
 
+## Multi-browser testing (Phase 9)
+
+```
+POST /api/tests/matrix → auth/ownership/entitlement → availability probe
+                       → atomic tx: browser_matrix_runs + one test_run/job/
+                         quota reservation/execution per browser
+                       → worker → automated-test handler
+                         → SandboxManager.create({ browserId })
+                         → per-browser pinned image + EXTENSIONLAB_BROWSER env
+                         → BrowserRuntimeAdapter (CDP | geckodriver+BiDi)
+                       → noteMatrixChildFinished (idempotent)
+                       → all children terminal → finalizeMatrixRun
+                         → deterministic CrossBrowserResult + report (once)
+```
+
+- One engine, three adapters: the Phase 4 test engine, evidence collection,
+  scoring and diagnostics are unchanged and central; `sandbox/runner/browsers/`
+  only adapts browser startup, extension loading and the automation protocol.
+  Chromium and Edge share the CDP adapter (Edge = Chromium engine); Firefox
+  has its own geckodriver/BiDi adapter and never fakes CDP.
+- Capability gating is deterministic: assertions/actions requiring an
+  `unsupported` capability are SKIPPED (`UNSUPPORTED`), never FAILED.
+- Matrix statuses `queued → running → completed | partial | failed |
+  cancelled`; `partial` is an honest aggregate when browsers disagree or one
+  was unavailable. Infrastructure failures (`INFRASTRUCTURE_ERROR`) never
+  masquerade as extension failures: the comparison reports insufficient data
+  (coverage drop + `browsersUnavailable`) instead of a lower score.
+- Quota policy: one test-run unit per browser execution (suite × 3 browsers =
+  3 units), reserved atomically with the matrix rows; client quota values are
+  never trusted.
+- Comparison model: score = passing/executed browsers, coverage =
+  executed/requested, evidence-based findings only (no root-cause claims),
+  redacted network/console comparison, runtime errors grouped by normalized
+  signature, side-by-side screenshots with no AI image interpretation.
+- Baselines pin exact package version/snapshot/suite/browser config;
+  regression comparison treats `FAIL → FAIL` as "ignored", never a new
+  regression.
+
+Details: [BROWSERS.md](BROWSERS.md).
+
 ## Storage and artifacts
 
 - Keys: `extensions/<userId>/<32 hex>.zip`, `artifacts/<runId>/<32 hex>.<ext>`.
@@ -223,6 +265,16 @@ subscriptions(id, user_id→users, provider, provider_customer_id, provider_subs
 billing_events(id, provider, provider_event_id, event_type, provider_event_type, user_id→users, subscription_id, result, created_at, processed_at)   UNIQUE(provider, provider_event_id)
 checkout_sessions(id, user_id→users, provider, provider_session_id, plan_id, status, created_at, updated_at)   UNIQUE(provider, provider_session_id)
 usage_events / quota_reservations: new (user_id, kind, created_at) indexes for period queries
+```
+
+Migration 005 (Phase 9):
+
+```text
+browser_matrix_runs(id, user_id→users, extension_id→extensions, package_id→extension_packages, test_suite_id, test_suite_name, status, browsers_json, compatibility_score, coverage, comparison_json, report_id→reports, reason, started_at, finished_at, created_at, updated_at)   index(user_id, created_at)
+browser_matrix_executions(id, matrix_run_id→browser_matrix_runs, browser_id, test_run_id→test_runs, job_id→jobs, engine, status, outcome, error_code, reason, score, passed, failed, skipped, browser_version, evidence_json, started_at, finished_at, created_at, updated_at)   UNIQUE(matrix_run_id, browser_id), index(test_run_id)
+test_baselines(id, user_id→users, extension_id→extensions, package_id→extension_packages, snapshot_id, test_suite_id, browsers_json, matrix_run_id, run_id, score, created_at, updated_at)   UNIQUE(user_id, extension_id)
+regression_comparisons(id, user_id→users, extension_id→extensions, previous_json, current_json, browsers_json, comparison_json, regression_count, improvement_count, created_at)   index(user_id, created_at)
+test_runs += browser_id, browser_version, engine, matrix_run_id
 ```
 
 All foreign keys cascade on user deletion, which is why `deleteAccount()` is

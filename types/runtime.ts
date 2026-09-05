@@ -156,6 +156,10 @@ export interface SandboxSnapshot {
   status: SandboxStatus;
   testUrl?: string;
   sourcePath: string;
+  /** Phase 9: browser runtime this sandbox was created for. */
+  browserId?: string;
+  /** Phase 9: runtime-detected browser version, once the runner reports it. */
+  browserVersion?: string;
   containerId?: string;
   controlPort?: number;
   createdAt: number;

@@ -88,6 +88,33 @@ refuses to run when a mandatory value is missing or unsafe.
 | `SANDBOX_TEMP_ROOT` | `/tmp/extensionlab-runtime` | Where packages are staged before `docker cp`. |
 | `SANDBOX_MAX_EVENTS`, `SANDBOX_MAX_EVENT_SIZE`, `SANDBOX_MAX_LOG_LENGTH`, `SANDBOX_MAX_NETWORK_EVENTS` | see `.env.example` | Event caps (Phase 3). |
 
+### Browsers (Phase 9)
+
+Build the per-browser images on every Docker-capable host that should serve
+cross-browser tests:
+
+```bash
+npm run sandbox:build:matrix    # chromium + edge + firefox images
+# individual: sandbox:build:chromium | sandbox:build:edge | sandbox:build:firefox
+# legacy (Chromium only) still works: npm run sandbox:build
+```
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SANDBOX_IMAGE_CHROMIUM` | falls back to `SANDBOX_IMAGE` | Dedicated Chromium image; set to `extensionlab-sandbox-chromium:local` after `sandbox:build:chromium`. |
+| `SANDBOX_IMAGE_EDGE` | `extensionlab-sandbox-edge:local` | Edge runs its own image/executable — never the Chromium one. |
+| `SANDBOX_IMAGE_FIREFOX` | `extensionlab-sandbox-firefox:local` | Firefox + pinned geckodriver. |
+| `BROWSER_CHROMIUM_VERSION` / `BROWSER_EDGE_VERSION` / `BROWSER_FIREFOX_VERSION` | `bundled` | Version label (e.g. image tag) shown in the UI and recorded on runs; the exact version is also detected at runtime. |
+| `BROWSER_<ID>_EXECUTABLE` / `BROWSER_<ID>_ENABLED` | per-browser | Executable inside the container / runtime kill-switch. |
+| `MAX_BROWSERS_PER_MATRIX` | `3` | Hard cap 3. |
+| `MAX_MATRIX_TESTS` / `MAX_MATRIX_CONCURRENCY` / `MAX_MATRIX_ARTIFACTS` | `32` / `2` / `24` | Matrix limits. |
+| `MATRIX_TIMEOUT_MS` / `MATRIX_BROWSER_TIMEOUT_MS` | `480000` / `150000` | Matrix and per-child budgets. |
+
+A browser whose image is missing is reported unavailable
+(`BROWSER_RUNTIME_UNAVAILABLE`, HTTP 503) and matrix creation fails closed
+before anything is queued or charged — build the image or set
+`BROWSER_<ID>_ENABLED=0` to hide the runtime. See [BROWSERS.md](BROWSERS.md).
+
 ### Jobs / worker
 
 | Variable | Default | Notes |

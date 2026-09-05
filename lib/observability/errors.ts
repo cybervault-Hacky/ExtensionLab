@@ -36,6 +36,10 @@ export const ERROR_CATALOG = {
   SUBSCRIPTION_STATE_INVALID: { status: 409, message: "This action is not possible in the subscription's current state.", retryable: false },
   WEBHOOK_SIGNATURE_INVALID: { status: 400, message: "The webhook signature could not be verified.", retryable: false },
   PAYMENT_REQUIRED: { status: 402, message: "This feature requires a paid plan.", retryable: false },
+  // Phase 9 cross-browser testing.
+  BROWSER_RUNTIME_UNAVAILABLE: { status: 503, message: "This browser runtime is not available on this deployment.", retryable: false },
+  BROWSER_NOT_SUPPORTED: { status: 400, message: "This browser is not supported for testing.", retryable: false },
+  MATRIX_LIMIT: { status: 400, message: "The browser matrix exceeds the configured limits.", retryable: false },
   // Phase 8 AI assistance. Messages are the exact strings the UI shows; none
   // of them reveal the provider, the model or any request/response content.
   AI_NOT_CONFIGURED: { status: 503, message: "AI assistance is currently unavailable.", retryable: false },
