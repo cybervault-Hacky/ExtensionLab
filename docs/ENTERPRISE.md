@@ -44,8 +44,10 @@ database, queue, storage and worker health for real (health ≠ readiness).
 ## Internal admin abstraction (config-gated)
 
 An internal admin surface can inspect queue depth, worker health, retry or
-cancel jobs. It is gated by configuration and strong authorization, and every
-action is audited. It intentionally provides **no shell and no Docker
+cancel jobs. It is gated by configuration (`ADMIN_API_ENABLED` +
+`ADMIN_API_TOKEN`, hashed at load, constant-time comparison) and fails closed:
+disabled deployments serve 404s indistinguishable from missing routes. Every
+retry/cancel is audited. It intentionally provides **no shell and no Docker
 execution** path.
 
 ## Public platform (published reports)
@@ -94,10 +96,14 @@ organization lookups, invitation token hash (unique), publication slug
 
 ## Testing
 
-`tests/phase10/` — 80 tests across organizations/RBAC/invitations, tenant
+`tests/phase10/` — 89 tests across organizations/RBAC/invitations, tenant
 isolation, API keys, the public API surface (auth, scopes, rate limits,
 idempotency, error envelope), webhooks (signing, SSRF, retries, states),
 audit (redaction, filtering, scoping), policies (determinism + gate
 integration), queue fairness (per-org caps, starvation freedom, priorities),
-exports, security (publications projection, SSO masking, workspace cookie
-validation, coordination, dispatch resilience).
+a deterministic multi-organization load test, exports, security (publications
+projection, SSO masking, workspace cookie validation, coordination, dispatch
+resilience) and the internal admin surface. Real-infrastructure suites
+(PostgreSQL, Redis, webhook receiver) live in `tests/e2e/phase10-infra.e2e.test.ts`
+behind `EXTENSIONLAB_E2E_{POSTGRES,REDIS,WEBHOOKS}=1` — default skip with
+reason, flagged runs hard-fail when the infrastructure is missing.

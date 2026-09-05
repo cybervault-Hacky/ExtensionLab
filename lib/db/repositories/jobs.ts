@@ -284,6 +284,19 @@ export function failJob(jobId: string, errorCode: string, errorMessage: string |
   return res.changes > 0;
 }
 
+/** Phase 10 admin path: requeue a terminal `failed` job (audited by callers). */
+export function requeueFailedJob(jobId: string): boolean {
+  const now = Date.now();
+  const res = getDb()
+    .prepare(
+      `UPDATE jobs SET status = 'queued', run_after = ?, error_code = 'ADMIN_RETRY', error_message = NULL,
+              updated_at = ?, worker_id = NULL, lease_expires_at = NULL, cancel_requested_at = NULL
+       WHERE id = ? AND status = 'failed'`,
+    )
+    .run(now, now, jobId);
+  return res.changes > 0;
+}
+
 export function scheduleRetry(jobId: string, runAfter: number, errorCode: string, errorMessage: string | null): boolean {
   const now = Date.now();
   const res = getDb()

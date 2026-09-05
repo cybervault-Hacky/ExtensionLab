@@ -319,4 +319,18 @@ Full reference in [AI.md](AI.md); operational summary:
   per class are environment-tunable and surfaced via `x-ratelimit-*` headers.
   `Idempotency-Key` records expire after 24 hours.
 - **Internal admin**: queue depth, worker health, job retry/cancel are exposed
-  through a config-gated, audited abstraction — no shell or Docker execution.
+  through a config-gated, audited abstraction — `ADMIN_API_ENABLED` +
+  `ADMIN_API_TOKEN` (hashed, constant-time compare; disabled means the routes
+  are indistinguishable from missing, 404). Retry/cancel are audited
+  (`admin_job_retry` / `admin_job_cancel`). No shell or Docker execution path
+  exists on this surface by design.
+
+## Phase 10 real-infrastructure e2e flags
+
+`EXTENSIONLAB_E2E_POSTGRES=1` (reachable PostgreSQL `DATABASE_URL`; also
+asserts the fail-closed startup error when the driver is absent),
+`EXTENSIONLAB_E2E_REDIS=1` (real Redis coordination: rate limits + locks) and
+`EXTENSIONLAB_E2E_WEBHOOKS=1` (signed delivery to a real HTTP receiver, with
+signature and tamper verification). Unflagged, these suites skip with an
+explicit reason; flagged, missing infrastructure is a hard failure — never a
+fake pass.

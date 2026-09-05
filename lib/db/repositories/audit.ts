@@ -24,7 +24,10 @@ export type AuditEventType =
   | "subscription_expired"
   | "payment_succeeded"
   | "payment_failed"
-  | "billing_state_changed";
+  | "billing_state_changed"
+  // Phase 10 internal admin (jobs/queue only; never secrets or job payloads).
+  | "admin_job_retry"
+  | "admin_job_cancel";
 
 export function recordAuditEvent(input: {
   userId: string | null;

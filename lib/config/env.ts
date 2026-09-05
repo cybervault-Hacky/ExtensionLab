@@ -8,6 +8,7 @@
  * readiness/ops output).
  */
 
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { MAX_EXTENSION_SIZE } from "@/lib/extension/limits";
 
@@ -144,6 +145,12 @@ export interface AppConfig {
     priorityEnterprise: number;
     priorityCi: number;
     priorityNormal: number;
+  };
+  /** Phase 10: config-gated internal admin abstraction (jobs/queue only). */
+  adminApi: {
+    enabled: boolean;
+    /** SHA-256 of ADMIN_API_TOKEN; the raw token is never kept in config. */
+    tokenHash: string | null;
   };
   /** Requests per minute per client for the sensitive endpoints. */
   rateLimits: {
@@ -532,6 +539,17 @@ function buildConfig(): AppConfig {
       priorityCi: num("JOB_PRIORITY_CI", 5, problems, { min: 0, max: 100 }),
       priorityNormal: num("JOB_PRIORITY_NORMAL", 0, problems, { min: -100, max: 100 }),
     },
+    adminApi: (() => {
+      const enabled = bool("ADMIN_API_ENABLED", false);
+      const token = str("ADMIN_API_TOKEN") ?? null;
+      if (enabled && !token) {
+        problems.push("ADMIN_API_ENABLED=true requires ADMIN_API_TOKEN to be set (fail closed).");
+      }
+      return {
+        enabled,
+        tokenHash: token ? createHash("sha256").update(token).digest("hex") : null,
+      };
+    })(),
     rateLimits: {
       login: num("RATE_LIMIT_LOGIN_PER_MIN", 30, problems, { min: 1 }),
       signup: num("RATE_LIMIT_SIGNUP_PER_MIN", 30, problems, { min: 1 }),

@@ -94,7 +94,14 @@ describe("policy evaluation", () => {
     const rules = { minHealthScore: 85, maxHighFindings: 0 };
     const input = evidence({ analysis: { healthScore: 90, criticalFindings: 0, highFindings: 5 } });
     const first = evaluatePolicy(rules, input);
-    for (let index = 0; index < 5; index += 1) expect(evaluatePolicy(rules, input)).toEqual(first);
+    // Verdict + checks are pure functions of (rules, evidence); only the
+    // `evaluatedAt` timestamp varies between calls.
+    for (let index = 0; index < 5; index += 1) {
+      const again = evaluatePolicy(rules, input);
+      expect(again.result).toBe(first.result);
+      expect(again.checks).toEqual(first.checks);
+      expect(typeof again.evaluatedAt).toBe("number");
+    }
     expect(first.result).toBe("FAIL");
   });
 
