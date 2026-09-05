@@ -40,6 +40,8 @@ export interface EnqueueOptions<T extends JobType> {
   within?: (job: JobRow) => void;
   /** Skip queue back-pressure checks (internal maintenance jobs). */
   skipBackpressure?: boolean;
+  /** Per-user active-job cap for this enqueue (defaults to JOB_MAX_QUEUED_PER_USER). */
+  maxActivePerUser?: number;
 }
 
 export function enqueueJob<T extends JobType>(options: EnqueueOptions<T>): { job: JobRow; created: boolean } {
@@ -54,7 +56,8 @@ export function enqueueJob<T extends JobType>(options: EnqueueOptions<T>): { job
       if (countQueuedJobs() >= config.jobs.maxQueueLength) {
         throw new AppError("QUEUE_FULL");
       }
-      if (options.userId && countActiveJobsForUser(options.userId, options.type) >= config.jobs.maxQueuedPerUser) {
+      const perUserCap = Math.max(options.maxActivePerUser ?? 0, config.jobs.maxQueuedPerUser);
+      if (options.userId && countActiveJobsForUser(options.userId, options.type) >= perUserCap) {
         throw new AppError("CONCURRENCY_LIMIT", {
           message: "You already have the maximum number of queued runs. Wait for one to finish.",
         });

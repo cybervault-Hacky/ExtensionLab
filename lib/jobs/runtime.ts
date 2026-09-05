@@ -1,5 +1,6 @@
 import "server-only";
 import { getConfig } from "@/lib/config/env";
+import { getMaxConcurrentRuns } from "@/lib/billing/entitlements";
 import { getSandboxManager } from "@/lib/runtime/sandbox-manager-instance";
 import { probeSandboxEnvironment } from "@/lib/runtime/availability";
 import { logger } from "@/lib/observability/logger";
@@ -21,6 +22,8 @@ export function createWorker(options: WorkerOptions = {}): JobWorker {
       const probe = await probeSandboxEnvironment();
       return { available: probe.available, detail: probe.available ? undefined : probe.reason };
     },
+    // Paid plans may run more jobs at once; SANDBOX_USER_CONCURRENCY is the floor.
+    userConcurrencyFor: (userId) => getMaxConcurrentRuns(userId),
     ...options,
   });
   worker

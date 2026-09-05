@@ -6,7 +6,8 @@ import type { NextRequest } from "next/server";
 import { getSandboxConfig } from "@/lib/runtime/config";
 import { extractZipToDirectory } from "@/lib/runtime/extract";
 import { getClientIp, validateIncomingTestUrl } from "@/lib/runtime/api-helpers";
-import { apiErrorResponse, requireApiUser, requireSameOrigin } from "@/lib/auth/api";
+import { apiErrorResponse, assertEntitled, requireApiUser, requireSameOrigin } from "@/lib/auth/api";
+import { canUploadPackage } from "@/lib/billing/entitlements";
 import { getSandboxManager } from "@/lib/runtime/sandbox-manager-instance";
 import { MAX_EXTENSION_SIZE } from "@/lib/extension/limits";
 import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
@@ -50,6 +51,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         { status: 413 },
       );
     }
+    assertEntitled(canUploadPackage(user.id, file.size));
 
     const urlValue = typeof form.get("testUrl") === "string" ? form.get("testUrl") as string : "";
     const urlResult = await validateIncomingTestUrl(urlValue);

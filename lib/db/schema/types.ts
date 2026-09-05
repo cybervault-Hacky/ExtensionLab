@@ -210,3 +210,57 @@ export interface ArtifactRow {
   created_at: number;
   expires_at: number;
 }
+
+/** Phase 7 rows. */
+export interface BillingCustomerRow {
+  user_id: string;
+  provider: string;
+  provider_customer_id: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SubscriptionRow {
+  id: string;
+  user_id: string;
+  provider: string;
+  provider_customer_id: string;
+  provider_subscription_id: string;
+  provider_price_id: string | null;
+  plan_id: string;
+  status: string;
+  current_period_start: number | null;
+  current_period_end: number | null;
+  cancel_at_period_end: number;
+  cancel_at: number | null;
+  canceled_at: number | null;
+  trial_end: number | null;
+  ended_at: number | null;
+  last_event_at: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface BillingEventRow {
+  id: string;
+  provider: string;
+  provider_event_id: string;
+  event_type: string;
+  provider_event_type: string;
+  user_id: string | null;
+  subscription_id: string | null;
+  result: string;
+  created_at: number;
+  processed_at: number | null;
+}
+
+export interface CheckoutSessionRow {
+  id: string;
+  user_id: string;
+  provider: string;
+  provider_session_id: string;
+  plan_id: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}

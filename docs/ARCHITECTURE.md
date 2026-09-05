@@ -126,6 +126,37 @@ actually starts (`consumeReservationForResource` + `usage_events`), and
 released on cancel-while-queued, permanent infrastructure failure, orphan
 failure or stale-run cleanup. Deferred retries keep the reservation open.
 
+## Billing and entitlements (Phase 7)
+
+```
+request → session user → subscriptions row → resolveEffectivePlan()
+        → entitlement check (canAnalyze / canRunTests / canCreateShare / …)
+        → usage (reserve / record) → operation
+```
+
+- `lib/billing/entitlements.ts` is the only place that decides what a user
+  may do. Product routes call `assertEntitled(canX(userId))` and receive the
+  stable `429 QUOTA_EXCEEDED {currentUsage, limit, resetAt, requiredPlan}` /
+  `402 PAYMENT_REQUIRED` / `413` errors from `lib/auth/api.ts`.
+- The plan catalog (`lib/billing/plans.ts`) is configuration-driven and
+  shared by the pricing page, the billing dashboard, `/api/me` and the checks.
+- Subscription state is a projection of the payment provider: hosted checkout
+  → signed webhook → `billing_events` ledger (idempotent) → `subscriptions`
+  → effective plan. `checkout.session.completed` alone never activates; the
+  return page polls `POST /api/billing/confirm`, which consults the provider
+  about the caller's own session.
+- Providers implement `BillingProvider` (`lib/billing/types.ts`); the Stripe
+  adapter is a thin fetch client, the fake provider is in-memory and emits the
+  same signed event shapes. Nothing outside `lib/billing/` knows which one is
+  active.
+- Usage periods: paid users are measured inside their billing period,
+  everyone else per calendar month. Reservations from Phase 6 are unchanged.
+- Loss of paid status (cancel, expiry, past-due after grace) switches the
+  effective plan to Free without touching data; cleanup then applies Free
+  retention.
+
+Details: [BILLING.md](BILLING.md), [PLANS.md](PLANS.md).
+
 ## Storage and artifacts
 
 - Keys: `extensions/<userId>/<32 hex>.zip`, `artifacts/<runId>/<32 hex>.<ext>`.
@@ -153,6 +184,16 @@ quota_reservations(id, user_id→users, kind, resource_id, job_id, created_at, c
 artifacts(id, test_run_id→test_runs, user_id→users, type, storage_key, size, sha256, label, created_at, expires_at)
 test_runs += package_id, job_id, stage, outcome, error_code, reason, access_token_hash, updated_at
 analysis_snapshots += package_id
+```
+
+Migration 003 (Phase 7):
+
+```text
+billing_customers(user_id→users, provider, provider_customer_id, created_at, updated_at)                      PK(user_id, provider), UNIQUE(provider, provider_customer_id)
+subscriptions(id, user_id→users, provider, provider_customer_id, provider_subscription_id, provider_price_id, plan_id, status, current_period_start, current_period_end, cancel_at_period_end, cancel_at, canceled_at, trial_end, ended_at, last_event_at, created_at, updated_at)   UNIQUE(provider, provider_subscription_id)
+billing_events(id, provider, provider_event_id, event_type, provider_event_type, user_id→users, subscription_id, result, created_at, processed_at)   UNIQUE(provider, provider_event_id)
+checkout_sessions(id, user_id→users, provider, provider_session_id, plan_id, status, created_at, updated_at)   UNIQUE(provider, provider_session_id)
+usage_events / quota_reservations: new (user_id, kind, created_at) indexes for period queries
 ```
 
 All foreign keys cascade on user deletion, which is why `deleteAccount()` is

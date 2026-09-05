@@ -1,4 +1,12 @@
-import { MAX_EXTENSION_SIZE } from "@/lib/extension/limits";
+/**
+ * @deprecated Phase 7 moved plans to `lib/billing`. This module remains only
+ * so older imports keep compiling; it returns the configured **Free** plan and
+ * knows nothing about a user's subscription. Use
+ * `getEffectivePlan(userId)` / `getUserPlan(userId)` from
+ * `@/lib/billing/entitlements` instead — they are the server-side authority.
+ */
+import { getPlan } from "@/lib/billing/config";
+import type { Plan as BillingPlan } from "@/lib/billing/types";
 
 export interface Plan {
   id: string;
@@ -10,22 +18,19 @@ export interface Plan {
   historyRetentionDays: number;
 }
 
-const numberFromEnv = (value: string | undefined, fallback: number): number => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
-};
-
-export function getActivePlan(): Plan {
+function legacyView(plan: BillingPlan): Plan {
   return {
-    id: "free",
-    name: "Free",
-    analysisLimit: numberFromEnv(process.env.PLAN_ANALYSIS_LIMIT, 10),
-    testRunLimit: numberFromEnv(process.env.PLAN_TEST_LIMIT, 5),
-    maxExtensionSize: numberFromEnv(
-      process.env.PLAN_MAX_EXTENSION_SIZE,
-      MAX_EXTENSION_SIZE,
-    ),
-    maxConcurrentRuns: numberFromEnv(process.env.PLAN_MAX_CONCURRENT_RUNS, 2),
-    historyRetentionDays: numberFromEnv(process.env.PLAN_HISTORY_RETENTION_DAYS, 30),
+    id: plan.id,
+    name: plan.name,
+    analysisLimit: plan.analysisLimit,
+    testRunLimit: plan.testRunLimit,
+    maxExtensionSize: plan.maxExtensionSize,
+    maxConcurrentRuns: plan.maxConcurrentRuns,
+    historyRetentionDays: plan.historyRetentionDays,
   };
+}
+
+/** @deprecated Returns the Free plan regardless of user. See module note. */
+export function getActivePlan(): Plan {
+  return legacyView(getPlan("free"));
 }

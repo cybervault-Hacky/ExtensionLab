@@ -12,6 +12,8 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { PaywallNotice, paywallFromError, type PaywallInfo } from "@/components/billing/PaywallNotice";
+import type { ApiErrorPayload } from "@/components/billing/types";
 
 interface ReportView {
   report: {
@@ -45,6 +47,7 @@ export function ReportDetail({ reportId }: { reportId: string }) {
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [paywall, setPaywall] = useState<PaywallInfo | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -66,6 +69,8 @@ export function ReportDetail({ reportId }: { reportId: string }) {
   const share = useCallback(
     async (expiresInHours: number) => {
       setBusy(true);
+      setPaywall(null);
+      setError(null);
       try {
         const response = await fetch(`/api/reports/${reportId}/share`, {
           method: "POST",
@@ -73,7 +78,12 @@ export function ReportDetail({ reportId }: { reportId: string }) {
           body: JSON.stringify({ expiresInHours }),
         });
         if (!response.ok) {
-          const body = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
+          const body = (await response.json().catch(() => null)) as ApiErrorPayload | null;
+          const limit = paywallFromError(body);
+          if (limit) {
+            setPaywall(limit);
+            return;
+          }
           setError(body?.error?.message ?? "The share link could not be created.");
           return;
         }
@@ -211,6 +221,7 @@ export function ReportDetail({ reportId }: { reportId: string }) {
             </div>
           </div>
         ) : null}
+        {paywall ? <PaywallNotice info={paywall} className="mt-4" /> : null}
         {error ? <p className="mt-3 text-sm text-[var(--status-error)]">{error}</p> : null}
       </Card>
 

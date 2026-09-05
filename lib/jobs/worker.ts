@@ -36,6 +36,8 @@ export interface WorkerOptions {
   shutdownGraceMs?: number;
   /** Per-user cap on simultaneously running AUTOMATED_TEST jobs. */
   userConcurrency?: number;
+  /** Optional per-user override (plan entitlement); falls back to `userConcurrency`. */
+  userConcurrencyFor?: (userId: string) => number;
   /** Reports sandbox availability in heartbeats (never exposed to clients directly). */
   sandboxProbe?: () => Promise<{ available: boolean; detail?: string }>;
   types?: readonly JobType[];
@@ -64,7 +66,8 @@ export class JobWorker {
   readonly workerId: string;
   private readonly handlers = new Map<JobType, JobHandler>();
   private readonly active = new Map<string, ActiveJob>();
-  private readonly options: Required<Omit<WorkerOptions, "sandboxProbe" | "types">> & Pick<WorkerOptions, "sandboxProbe" | "types">;
+  private readonly options: Required<Omit<WorkerOptions, "sandboxProbe" | "types" | "userConcurrencyFor">> &
+    Pick<WorkerOptions, "sandboxProbe" | "types" | "userConcurrencyFor">;
   private stopping = false;
   private running = false;
   private loopPromise: Promise<void> | null = null;
@@ -85,6 +88,7 @@ export class JobWorker {
       jobTimeoutMs: options.jobTimeoutMs ?? config.jobs.jobTimeoutMs,
       shutdownGraceMs: options.shutdownGraceMs ?? config.jobs.shutdownGraceMs,
       userConcurrency: options.userConcurrency ?? config.sandbox.userConcurrency,
+      userConcurrencyFor: options.userConcurrencyFor,
       sandboxProbe: options.sandboxProbe,
       types: options.types,
     };
@@ -269,7 +273,7 @@ export class JobWorker {
     const excludeUserIds = new Set<string>();
     for (const entry of this.active.values()) {
       if (entry.job.type === "AUTOMATED_TEST" && entry.job.user_id) {
-        if (countRunningJobsForUser(entry.job.user_id, "AUTOMATED_TEST") >= this.options.userConcurrency) {
+        if (countRunningJobsForUser(entry.job.user_id, "AUTOMATED_TEST") >= this.userConcurrencyLimit(entry.job.user_id)) {
           excludeUserIds.add(entry.job.user_id);
         }
       }
@@ -280,6 +284,18 @@ export class JobWorker {
       leaseMs: this.options.leaseMs,
       excludeUserIds: [...excludeUserIds],
     });
+  }
+
+  private userConcurrencyLimit(userId: string): number {
+    const base = this.options.userConcurrency;
+    if (!this.options.userConcurrencyFor) return base;
+    try {
+      const resolved = this.options.userConcurrencyFor(userId);
+      return Number.isFinite(resolved) && resolved >= 1 ? Math.max(base, Math.floor(resolved)) : base;
+    } catch {
+      // An entitlement lookup failure never blocks execution; fall back to the floor.
+      return base;
+    }
   }
 
   private async run(job: JobRow): Promise<void> {

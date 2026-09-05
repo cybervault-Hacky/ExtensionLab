@@ -1,8 +1,8 @@
 import { getDb, transaction } from "../client";
 import { generateDbId } from "../ids";
 import type { QuotaReservationRow } from "../schema/types";
-import { getActivePlan } from "../plan";
-import { countUsageThisMonth, recordUsage, type UsageKind } from "./usage";
+import { recordUsage, type UsageKind } from "./usage";
+import { canAnalyze, canRunTests, getQuotaUsage, type QuotaDenial } from "@/lib/billing/entitlements";
 
 /**
  * Atomic quota reservations.
@@ -21,37 +21,31 @@ export interface QuotaSnapshot {
   reserved: number;
   limit: number;
   remaining: number;
+  /** When the current usage period ends and the counters start over. */
+  resetAt: number;
 }
 
-function monthStart(): number {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0).getTime();
-}
-
+/**
+ * Open reservations in the user's *current usage period* (Phase 7: the
+ * subscription's billing period for paid plans, the calendar month otherwise).
+ */
 export function countOpenReservations(userId: string, kind: UsageKind): number {
-  return (
-    getDb()
-      .prepare(
-        `SELECT COUNT(*) AS total FROM quota_reservations
-         WHERE user_id = ? AND kind = ? AND consumed_at IS NULL AND released_at IS NULL AND created_at >= ?`,
-      )
-      .get(userId, kind, monthStart()) as { total: number }
-  ).total;
+  return getQuotaUsage(userId, kind).reserved;
 }
 
+/** Plan- and period-aware usage snapshot (delegates to the entitlement service). */
 export function getQuotaSnapshot(userId: string, kind: UsageKind): QuotaSnapshot {
-  const plan = getActivePlan();
-  const limit = kind === "analysis" ? plan.analysisLimit : plan.testRunLimit;
-  const used = countUsageThisMonth(userId, kind);
-  const reserved = countOpenReservations(userId, kind);
-  return { used, reserved, limit, remaining: Math.max(0, limit - used - reserved) };
+  const usage = getQuotaUsage(userId, kind);
+  return { used: usage.used, reserved: usage.reserved, limit: usage.limit, remaining: usage.remaining, resetAt: usage.resetAt };
 }
 
 export class QuotaExceededError extends Error {
   readonly code = "QUOTA_EXCEEDED";
-  constructor(readonly kind: UsageKind, readonly snapshot: QuotaSnapshot) {
+  readonly denial: QuotaDenial | null;
+  constructor(readonly kind: UsageKind, readonly snapshot: QuotaSnapshot, denial: QuotaDenial | null = null) {
     super("Quota exceeded.");
     this.name = "QuotaExceededError";
+    this.denial = denial;
   }
 }
 
@@ -68,8 +62,14 @@ export function reserveQuota(input: {
 }): QuotaReservationRow {
   const db = getDb();
   return transaction(db, () => {
-    const snapshot = getQuotaSnapshot(input.userId, input.kind);
-    if (snapshot.remaining <= 0) throw new QuotaExceededError(input.kind, snapshot);
+    // The entitlement check runs inside the writer transaction (BEGIN IMMEDIATE),
+    // so two simultaneous requests for the last unit serialize here and only
+    // one of them can insert a reservation.
+    const verdict = input.kind === "analysis" ? canAnalyze(input.userId) : canRunTests(input.userId);
+    if (!verdict.allowed) {
+      const snapshot = getQuotaSnapshot(input.userId, input.kind);
+      throw new QuotaExceededError(input.kind, snapshot, verdict.reason === "quota" ? verdict.quota : null);
+    }
     const id = generateDbId("qres");
     db.prepare(
       `INSERT INTO quota_reservations (id, user_id, kind, resource_id, job_id, created_at)

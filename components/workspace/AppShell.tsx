@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Activity,
+  CreditCard,
   FileText,
   FolderOpen,
   LayoutDashboard,
@@ -23,6 +24,9 @@ export interface AppShellUser {
   id: string;
   email: string;
   name: string;
+  /** Effective plan name resolved server-side (display only). */
+  planName?: string;
+  planState?: "free" | "paid" | "attention";
 }
 
 const navItems = [
@@ -30,6 +34,7 @@ const navItems = [
   { label: "Extensions", href: "/dashboard/extensions", icon: FolderOpen },
   { label: "Tests", href: "/dashboard/tests", icon: Activity },
   { label: "Reports", href: "/dashboard/reports", icon: FileText },
+  { label: "Billing", href: "/dashboard/billing", icon: CreditCard },
 ];
 
 export function AppShell({
@@ -96,7 +101,10 @@ export function AppShell({
             {nav}
             <div className="border-t border-[var(--border)] pt-6">
               <div className="px-2">
-                <p className="text-sm font-semibold">{user.name || "Account"}</p>
+                <div className="flex items-center gap-2">
+                  <p className="truncate text-sm font-semibold">{user.name || "Account"}</p>
+                  {user.planName ? <PlanBadge name={user.planName} state={user.planState} /> : null}
+                </div>
                 <p className="truncate text-xs text-[var(--text-secondary)]">{user.email}</p>
               </div>
               <div className="mt-4 space-y-1">
@@ -183,8 +191,11 @@ export function AppShell({
               </Button>
               <div className="mt-4">{nav}</div>
               <div className="mt-4 flex items-center justify-between border-t border-[var(--border)] pt-4">
-                <div>
-                  <p className="text-sm font-semibold">{user.name || "Account"}</p>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="truncate text-sm font-semibold">{user.name || "Account"}</p>
+                    {user.planName ? <PlanBadge name={user.planName} state={user.planState} /> : null}
+                  </div>
                   <p className="truncate text-xs text-[var(--text-secondary)]">{user.email}</p>
                 </div>
                 <Button variant="secondary" size="sm" onClick={() => void logout()} loading={loggingOut}>
@@ -200,5 +211,24 @@ export function AppShell({
       </div>
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
+  );
+}
+
+function PlanBadge({ name, state }: { name: string; state?: "free" | "paid" | "attention" }) {
+  return (
+    <Link
+      href="/dashboard/billing"
+      className={cn(
+        "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-semibold leading-4",
+        state === "paid"
+          ? "border-transparent bg-[var(--accent-soft)] text-[var(--accent)]"
+          : state === "attention"
+            ? "border-[var(--status-warning)] text-[var(--status-warning)]"
+            : "border-[var(--border)] text-[var(--text-secondary)]",
+      )}
+      aria-label={`Plan: ${name}. Open billing`}
+    >
+      {name}
+    </Link>
   );
 }

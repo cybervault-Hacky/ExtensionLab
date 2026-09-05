@@ -3,10 +3,12 @@ import type { NextRequest } from "next/server";
 import {
   ApiError,
   apiErrorResponse,
+  assertEntitled,
   badRequest,
   requireApiUser,
   requireSameOrigin,
 } from "@/lib/auth/api";
+import { canCreateShare } from "@/lib/billing/entitlements";
 import { getOwnedReport } from "@/lib/db/repositories/reports";
 import { createShare, getActiveShareForReport, revokeShare } from "@/lib/db/repositories/shares";
 import { generateShareToken } from "@/lib/db/ids";
@@ -40,8 +42,10 @@ export async function POST(
     if (expiresInHours !== undefined && !allowedExpirationHours.includes(Number(expiresInHours))) {
       throw badRequest("Invalid expiration.");
     }
-    const expiresAt =
-      Number(expiresInHours) > 0 ? Date.now() + Number(expiresInHours) * 60 * 60 * 1000 : null;
+    const hours = expiresInHours === undefined ? 0 : Number(expiresInHours);
+    // Plan entitlement: sharing availability and the longest allowed lifetime.
+    assertEntitled(canCreateShare(user.id, hours > 0 ? hours : null));
+    const expiresAt = hours > 0 ? Date.now() + hours * 60 * 60 * 1000 : null;
 
     // Revoke any previous live link so the token rotates on every share request.
     const active = getActiveShareForReport(report.id);

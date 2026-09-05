@@ -16,6 +16,8 @@ import { AutomatedTestLaunchCard } from "@/components/tester/AutomatedTestLaunch
 import { ExtensionLabError } from "@/lib/extension/errors";
 import { validateExtensionFile } from "@/lib/extension/validation";
 import { Button } from "@/components/ui/Button";
+import { PaywallNotice, paywallFromError, type PaywallInfo } from "@/components/billing/PaywallNotice";
+import type { ApiErrorPayload } from "@/components/billing/types";
 import type { AnalysisStep, ExtensionAnalysis } from "@/types/extension";
 
 type WorkbenchState = "idle" | "uploading" | "done" | "error";
@@ -30,12 +32,15 @@ export function Workbench() {
   const [savedExtensionId, setSavedExtensionId] = useState<string | null>(null);
   const [savedSnapshotId, setSavedSnapshotId] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [savePaywall, setSavePaywall] = useState<PaywallInfo | null>(null);
   const [step, setStep] = useState<AnalysisStep | null>(null);
   const [ratio, setRatio] = useState(0);
   const reportRef = useRef<HTMLDivElement>(null);
 
   const reset = useCallback(() => {
     setState("idle");
+    setSaveError(null);
+    setSavePaywall(null);
     setStatus("idle");
     setFileName("");
     setErrorMessage("");
@@ -98,8 +103,10 @@ export function Workbench() {
           setSavedExtensionId(saved.extension.id);
           setSavedSnapshotId(saved.snapshot.id);
         } else {
-          const body = (await saveResponse.json().catch(() => null)) as { error?: { message?: string } } | null;
-          setSaveError(body?.error?.message ?? "The analysis could not be saved to your workspace.");
+          const body = (await saveResponse.json().catch(() => null)) as ApiErrorPayload | null;
+          const limit = paywallFromError(body);
+          if (limit) setSavePaywall(limit);
+          else setSaveError(body?.error?.message ?? "The analysis could not be saved to your workspace.");
         }
       } catch {
         setSaveError("The analysis could not be saved to your workspace.");
@@ -211,6 +218,12 @@ export function Workbench() {
             </div>
 
             <div ref={reportRef} className="mt-8 space-y-6">
+              {savePaywall ? <PaywallNotice info={savePaywall} /> : null}
+              {saveError ? (
+                <div role="status" className="rounded-xl border border-[var(--status-warning)] bg-[var(--status-warning-soft)] p-3 text-sm">
+                  {saveError} The report below is still available in this tab.
+                </div>
+              ) : null}
               <ExtensionSummary analysis={analysis} />
               <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
                 <RuntimeLaunchCard analysis={analysis} sourceFile={sourceFile} />

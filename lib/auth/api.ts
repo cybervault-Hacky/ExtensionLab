@@ -8,6 +8,9 @@ import { generateReferenceId } from "@/lib/runtime/ids";
 import { AppError, ERROR_CATALOG, LEGACY_CODE_MAP, classifyError, type ErrorCode } from "@/lib/observability/errors";
 import { generateRequestId, logger, resolveRequestId } from "@/lib/observability/logger";
 import { QuotaExceededError } from "@/lib/db/repositories/quota";
+import type { EntitlementResult, QuotaDenial } from "@/lib/billing/entitlements";
+import { getPlan } from "@/lib/billing/config";
+import type { PlanId } from "@/lib/billing/types";
 
 type ApiErrorCode =
   | "unauthorized"
@@ -71,7 +74,95 @@ export const rateLimited = (seconds: number) =>
   );
 
 export const usageLimit = (label: string) =>
-  new ApiError(429, "limit_reached", `Your Free plan ${label} limit has been reached.`);
+  new ApiError(429, "limit_reached", `Your plan's ${label} limit has been reached.`);
+
+/**
+ * Structured details attached to plan/quota denials so the client can render
+ * a paywall without guessing: `{ currentUsage, limit, resetAt, requiredPlan }`.
+ */
+export interface EntitlementDetails {
+  reason: "quota" | "plan" | "size";
+  kind?: "analysis" | "test_run";
+  currentUsage?: number;
+  limit?: number;
+  resetAt?: number;
+  maxExtensionSize?: number;
+  plan: PlanId;
+  requiredPlan: PlanId | null;
+  requiredPlanName: string | null;
+}
+
+/** Thrown when the entitlement service denies an operation. */
+export class EntitlementError extends Error {
+  readonly status: number;
+  readonly code: ApiErrorCode;
+  readonly errorCode: ErrorCode;
+  readonly details: EntitlementDetails;
+  readonly referenceId: string;
+
+  constructor(status: number, code: ApiErrorCode, errorCode: ErrorCode, message: string, details: EntitlementDetails) {
+    super(message);
+    this.name = "EntitlementError";
+    this.status = status;
+    this.code = code;
+    this.errorCode = errorCode;
+    this.details = details;
+    this.referenceId = generateReferenceId();
+  }
+}
+
+const KIND_LABEL: Record<"analysis" | "test_run", string> = { analysis: "analysis", test_run: "automated test run" };
+
+function planName(planId: PlanId | null): string | null {
+  return planId ? getPlan(planId).name : null;
+}
+
+export function quotaDenialDetails(denial: QuotaDenial): EntitlementDetails {
+  return {
+    reason: "quota",
+    kind: denial.kind,
+    currentUsage: denial.currentUsage,
+    limit: denial.limit,
+    resetAt: denial.resetAt,
+    plan: denial.planId,
+    requiredPlan: denial.requiredPlan,
+    requiredPlanName: planName(denial.requiredPlan),
+  };
+}
+
+function quotaMessage(denial: QuotaDenial): string {
+  const plan = getPlan(denial.planId).name;
+  const upgrade = denial.requiredPlan ? ` Upgrade to ${getPlan(denial.requiredPlan).name} for more.` : "";
+  return `Your ${plan} plan ${KIND_LABEL[denial.kind]} limit (${denial.limit} per billing period) has been reached.${upgrade}`;
+}
+
+/**
+ * Converts an entitlement verdict into the API error to throw. Callers write
+ * `assertEntitled(canAnalyze(user.id))` and never compare plans themselves.
+ */
+export function assertEntitled(result: EntitlementResult, currentPlan?: PlanId): void {
+  if (result.allowed) return;
+  if (result.reason === "quota") {
+    throw new EntitlementError(429, "limit_reached", "QUOTA_EXCEEDED", quotaMessage(result.quota), quotaDenialDetails(result.quota));
+  }
+  const plan = currentPlan ?? "free";
+  if (result.reason === "size") {
+    const mb = Math.floor(result.maxExtensionSize / (1024 * 1024));
+    throw new EntitlementError(413, "limit_reached", "PAYMENT_REQUIRED", `This extension is larger than your plan's ${mb} MB limit.`, {
+      reason: "size",
+      maxExtensionSize: result.maxExtensionSize,
+      plan,
+      requiredPlan: result.requiredPlan,
+      requiredPlanName: planName(result.requiredPlan),
+    });
+  }
+  throw new EntitlementError(402, "limit_reached", "PAYMENT_REQUIRED", result.message, {
+    reason: "plan",
+    plan,
+    requiredPlan: result.requiredPlan,
+    requiredPlanName: planName(result.requiredPlan),
+  });
+}
 
 /** Request id from the incoming header (validated) or freshly generated. */
 export function requestIdFrom(request: NextRequest | Request | undefined): string {
@@ -85,6 +176,8 @@ export interface ApiErrorBody {
     message: string;
     referenceId: string;
     requestId: string;
+    /** Present for QUOTA_EXCEEDED / PAYMENT_REQUIRED: what was hit and which plan lifts it. */
+    details?: EntitlementDetails;
   };
 }
 
@@ -95,7 +188,7 @@ export interface ApiErrorBody {
  */
 export function apiErrorResponse(error: unknown, request?: NextRequest | Request): NextResponse {
   const requestId = requestIdFrom(request);
-  const { status, code, errorCode, message, referenceId } = describeError(error);
+  const { status, code, errorCode, message, referenceId, details } = describeError(error);
   const level = status >= 500 ? "error" : "warn";
   logger[level]("api.error", {
     requestId,
@@ -105,7 +198,7 @@ export function apiErrorResponse(error: unknown, request?: NextRequest | Request
     ...(error instanceof Error && status >= 500 ? { errorName: error.name } : {}),
   });
   const body: ApiErrorBody = {
-    error: { code, errorCode, message: `${message}`, referenceId, requestId },
+    error: { code, errorCode, message: `${message}`, referenceId, requestId, ...(details ? { details } : {}) },
   };
   return NextResponse.json(body, { status, headers: { "x-request-id": requestId } });
 }
@@ -116,7 +209,18 @@ function describeError(error: unknown): {
   errorCode: ErrorCode;
   message: string;
   referenceId: string;
+  details?: EntitlementDetails;
 } {
+  if (error instanceof EntitlementError) {
+    return {
+      status: error.status,
+      code: error.code,
+      errorCode: error.errorCode,
+      message: error.message,
+      referenceId: error.referenceId,
+      details: error.details,
+    };
+  }
   if (error instanceof ApiError) {
     return {
       status: error.status,
@@ -136,15 +240,21 @@ function describeError(error: unknown): {
     };
   }
   if (error instanceof QuotaExceededError) {
+    const denial: QuotaDenial = error.denial ?? {
+      kind: error.kind,
+      currentUsage: error.snapshot.used + error.snapshot.reserved,
+      limit: error.snapshot.limit,
+      resetAt: error.snapshot.resetAt,
+      planId: "free",
+      requiredPlan: null,
+    };
     return {
       status: 429,
       code: "limit_reached",
       errorCode: "QUOTA_EXCEEDED",
-      message:
-        error.kind === "test_run"
-          ? "Your Free plan automated test run limit has been reached."
-          : "Your Free plan analysis limit has been reached.",
+      message: quotaMessage(denial),
       referenceId: generateReferenceId(),
+      details: quotaDenialDetails(denial),
     };
   }
   const structured = error as { code?: unknown; message?: unknown; referenceId?: unknown } | null;
@@ -187,7 +297,15 @@ function legacyCodeFor(code: ErrorCode): ApiErrorCode {
       return "limit_reached";
     case "CONFLICT":
     case "JOB_CANCELLED":
+    case "SUBSCRIPTION_STATE_INVALID":
       return "conflict";
+    case "INVALID_PLAN":
+    case "WEBHOOK_SIGNATURE_INVALID":
+      return "bad_request";
+    case "SUBSCRIPTION_NOT_FOUND":
+      return "not_found";
+    case "PAYMENT_REQUIRED":
+      return "limit_reached";
     default:
       return "internal";
   }

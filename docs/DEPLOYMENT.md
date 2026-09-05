@@ -133,8 +133,30 @@ in `docs/OPERATIONS.md`.
 
 ### Plan limits
 
-`PLAN_ANALYSIS_LIMIT`, `PLAN_TEST_LIMIT`, `PLAN_MAX_EXTENSION_SIZE`,
-`PLAN_MAX_CONCURRENT_RUNS`, `PLAN_HISTORY_RETENTION_DAYS` (Phase 5).
+`PLAN_<FREE|PRO|BUSINESS>_<ANALYSIS_LIMIT|TEST_LIMIT|MAX_EXTENSION_SIZE|
+MAX_CONCURRENT_RUNS|HISTORY_RETENTION_DAYS|ARTIFACT_RETENTION_DAYS|
+PACKAGE_RETENTION_DAYS>`. The Phase 5 names (`PLAN_ANALYSIS_LIMIT`,
+`PLAN_TEST_LIMIT`, `PLAN_MAX_EXTENSION_SIZE`, `PLAN_MAX_CONCURRENT_RUNS`,
+`PLAN_HISTORY_RETENTION_DAYS`) still configure the Free plan. Defaults and
+semantics: [PLANS.md](PLANS.md).
+
+### Billing (Phase 7)
+
+| Variable | Notes |
+| --- | --- |
+| `BILLING_PROVIDER` | `stripe`, `fake` (dev/test only, rejected in production) or `disabled` (default in production: everyone on Free, no purchase UI) |
+| `BILLING_SECRET_KEY` | provider secret/restricted key; production requires a live key |
+| `BILLING_WEBHOOK_SECRET` | signing secret of the `/api/billing/webhook` endpoint |
+| `BILLING_PRO_PRICE_ID`, `BILLING_BUSINESS_PRICE_ID` | provider price ids; a plan without one is not purchasable |
+| `BILLING_CURRENCY`, `BILLING_PRO_AMOUNT`, `BILLING_BUSINESS_AMOUNT` | display only (minor units); the provider price is what is charged |
+| `BILLING_PAST_DUE_GRACE_DAYS` | paid access kept after a failed renewal (7) |
+| `BILLING_DELETION_POLICY` | `cancel_immediately` (default) or `cancel_at_period_end` on account deletion |
+| `RATE_LIMIT_BILLING_{READ,CHECKOUT,PORTAL,CHANGE,WEBHOOK}_PER_MIN` | 60 / 5 / 5 / 10 / 600 |
+
+`APP_URL` must be the public origin: checkout success/cancel and portal
+return URLs are built from it. The webhook endpoint must receive the raw
+request body (no JSON re-serialisation by a proxy). Full setup, lifecycle and
+troubleshooting: [BILLING.md](BILLING.md).
 
 ## Build and run without containers
 
@@ -203,7 +225,10 @@ with `SANDBOX_MAX_CONCURRENCY` / `WORKER_CONCURRENCY` instead.
 - Migrations are additive: `002_phase6_infrastructure.sql` creates
   `extension_packages`, `jobs`, `job_events`, `workers`, `quota_reservations`,
   `artifacts` and adds nullable columns to `test_runs` /
-  `analysis_snapshots`. Phase 5 data is never modified or deleted.
+  `analysis_snapshots`; `003_phase7_billing.sql` creates `billing_customers`,
+  `subscriptions`, `billing_events`, `checkout_sessions` and period indexes on
+  `usage_events` / `quota_reservations`. Phase 5 data is never modified or
+  deleted.
 - The web process also applies pending migrations lazily on first database
   access, so a forgotten explicit migration degrades gracefully; `/api/ready`
   reports `migrationsPending` so you can catch it.

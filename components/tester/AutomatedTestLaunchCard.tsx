@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { FlaskConical, Globe, Loader2, Lock, Play } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { PaywallNotice, paywallFromError, type PaywallInfo } from "@/components/billing/PaywallNotice";
+import type { ApiErrorPayload } from "@/components/billing/types";
 import type { ExtensionAnalysis } from "@/types/extension";
 
 export interface AutomatedTestLaunchCardProps {
@@ -22,6 +24,7 @@ export function AutomatedTestLaunchCard({
   const router = useRouter();
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [paywall, setPaywall] = useState<PaywallInfo | null>(null);
 
   const launch = async () => {
     if (!sourceFile) {
@@ -30,6 +33,7 @@ export function AutomatedTestLaunchCard({
     }
     setLaunching(true);
     setError(null);
+    setPaywall(null);
     try {
       const form = new FormData();
       form.append("file", sourceFile, sourceFile.name);
@@ -37,7 +41,12 @@ export function AutomatedTestLaunchCard({
       if (extensionId) form.append("extensionId", extensionId);
       const response = await fetch("/api/tests/create", { method: "POST", body: form });
       if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as { error?: { message?: string } } | null;
+        const body = (await response.json().catch(() => null)) as ApiErrorPayload | null;
+        const limit = paywallFromError(body);
+        if (limit) {
+          setPaywall(limit);
+          return;
+        }
         setError(body?.error?.message ?? "The automated test suite could not be prepared.");
         return;
       }
@@ -104,6 +113,7 @@ export function AutomatedTestLaunchCard({
         </Button>
       </div>
 
+      {paywall ? <PaywallNotice info={paywall} className="mt-4" /> : null}
       {error ? (
         <div className="mt-4 rounded-xl border border-[var(--status-error)] bg-[var(--status-error-soft)] p-3 text-sm text-[var(--text-primary)]">
           {error}

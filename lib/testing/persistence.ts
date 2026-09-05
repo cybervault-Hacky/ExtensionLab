@@ -13,7 +13,7 @@ import { getOwnedExtension, markExtensionTested } from "@/lib/db/repositories/ex
 import { countUsageThisMonth, recordUsage } from "@/lib/db/repositories/usage";
 import { appendJobEvent } from "@/lib/db/repositories/jobs";
 import { consumeReservationForResource, releaseReservationForResource } from "@/lib/db/repositories/quota";
-import { getActivePlan } from "@/lib/db/plan";
+import { getUserPlan } from "@/lib/billing/entitlements";
 import { getDb, transaction } from "@/lib/db/client";
 import { logger, recordMetric } from "@/lib/observability/logger";
 import { exportTestResults } from "./diagnostics";
@@ -35,7 +35,7 @@ import type { TestRunPersistenceHooks } from "./test-runner";
 const pendingByUser = new Map<string, Set<string>>();
 
 export function canCreateTestRun(userId: string): boolean {
-  const plan = getActivePlan();
+  const plan = getUserPlan(userId);
   const used = countUsageThisMonth(userId, "test_run");
   const pending = pendingByUser.get(userId)?.size ?? 0;
   return used + pending < plan.testRunLimit;

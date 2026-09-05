@@ -102,6 +102,43 @@ container. `docker-compose.prod.yml` follows this split.
   `RUNNER_TOKEN` (random, per container) and `SANDBOX_ID`. User sessions,
   database paths and application secrets never enter a container.
 
+## Billing (Phase 7)
+
+- **Server-side authority.** Entitlements are derived from the
+  `subscriptions` table, which is written only by the webhook processor and
+  the owner-checked checkout confirmation, both from provider objects. There
+  is no set-plan API, no client-supplied price/currency/plan state, and the
+  UI's plan badges are decoration — every product route calls
+  `lib/billing/entitlements.ts` before doing work.
+- **Checkout.** `POST /api/billing/checkout` accepts only `planId`; the price
+  id comes from configuration. Sessions are recorded with their owner so the
+  return page can confirm only its own session (`session_id` in the URL grants
+  nothing; another user's id yields `unknown`).
+- **Webhook.** Signature over the raw body (`t=…,v1=…` HMAC-SHA256, 300 s
+  tolerance, constant-time compare); missing/invalid/tampered/stale
+  signatures → `400`; body cap 1 MB; rate limited; idempotent through the
+  `billing_events` unique index; responses carry no stack traces or provider
+  payloads. It is the only unauthenticated, CSRF-exempt billing route.
+- **CSRF and auth.** Every other `/api/billing/*` route requires a session
+  and passes `requireSameOrigin`; checkout/portal/change actions are rate
+  limited per user + IP (`RATE_LIMIT_BILLING_*`).
+- **Data minimisation.** No card data, no payment methods, no raw provider
+  payloads are stored; invoices are linked, not mirrored. Clients receive
+  derived state only (plan, state, period, usage) — never provider customer
+  / subscription / event ids or secrets.
+- **Secrets.** `BILLING_SECRET_KEY` and `BILLING_WEBHOOK_SECRET` come from
+  the environment, are sent only in the `Authorization` header / used for
+  HMAC, are absent from `describeConfig()`, logs and the client bundle
+  (asserted by `tests/phase7/product-entitlements.test.ts`), and production
+  refuses test keys and the fake provider.
+- **Audit and observability.** `checkout_started`,
+  `subscription_created/activated/changed/cancelled/reactivated`,
+  `payment_succeeded`, `payment_failed` audit rows (amount + currency only);
+  `billing.*` metrics and structured logs with request ids.
+- **Account deletion** cancels the provider subscription first and aborts
+  (retryable) if the provider call fails, so a deleted account can never keep
+  being charged.
+
 ## Logging
 
 Structured JSON logs (`lib/observability/logger.ts`) include timestamps,

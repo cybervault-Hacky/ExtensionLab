@@ -27,6 +27,15 @@ export const ERROR_CATALOG = {
   CONFLICT: { status: 409, message: "This action conflicts with the current state.", retryable: false },
   EMAIL_DELIVERY_FAILED: { status: 503, message: "The message could not be delivered.", retryable: true },
   WORKER_UNAVAILABLE: { status: 503, message: "Background processing is currently unavailable.", retryable: true },
+  // Phase 7 billing.
+  BILLING_NOT_CONFIGURED: { status: 503, message: "Billing is not available on this deployment.", retryable: false },
+  BILLING_PROVIDER_ERROR: { status: 502, message: "The billing provider could not complete the request. Please try again.", retryable: true },
+  CHECKOUT_CREATION_FAILED: { status: 502, message: "We couldn't start checkout. Please try again.", retryable: true },
+  INVALID_PLAN: { status: 400, message: "This plan is not available.", retryable: false },
+  SUBSCRIPTION_NOT_FOUND: { status: 404, message: "No subscription was found for this account.", retryable: false },
+  SUBSCRIPTION_STATE_INVALID: { status: 409, message: "This action is not possible in the subscription's current state.", retryable: false },
+  WEBHOOK_SIGNATURE_INVALID: { status: 400, message: "The webhook signature could not be verified.", retryable: false },
+  PAYMENT_REQUIRED: { status: 402, message: "This feature requires a paid plan.", retryable: false },
   INTERNAL: { status: 500, message: "The request could not be completed.", retryable: false },
 } as const;
 

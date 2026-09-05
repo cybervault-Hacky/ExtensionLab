@@ -101,9 +101,16 @@ with counters:
 | Reconciliation | rows without blobs → `deleted`; blobs without rows (older than 10 min) removed; `deleting` rows finalized | — |
 | Auth | expired reset tokens, expired sessions, expired/revoked shares | `RESET_TOKEN_RETENTION_DAYS`, `SESSION_RETENTION_DAYS`, `SHARE_RETENTION_DAYS` |
 | Jobs | queued jobs never run → `expired`; finished jobs deleted; stale active runs → `INFRASTRUCTURE_ERROR`; dangling reservations released | `STALE_JOB_DAYS`, `JOB_RETENTION_DAYS`, `STALE_RUN_MINUTES` |
+| Billing | open checkout sessions older than 24 h → `expired`; old checkout rows deleted; processed `billing_events` older than 90 days deleted (subscriptions are never deleted) | `JOB_RETENTION_DAYS` (checkout rows) |
+
+Artifact and package retention are **per plan** since Phase 7
+(`PLAN_<PLAN>_ARTIFACT_RETENTION_DAYS` / `PLAN_<PLAN>_PACKAGE_RETENTION_DAYS`);
+the global `ARTIFACT_RETENTION_DAYS` / `PACKAGE_RETENTION_DAYS` values apply to
+the Free plan. A downgraded user's data ages out under Free retention from the
+next cleanup on.
 
 Run it on demand on the worker host if needed (optionally scoped to
-`artifacts`, `packages`, `auth` or `jobs`):
+`artifacts`, `packages`, `auth`, `jobs` or `billing`):
 
 ```bash
 npm run cleanup
@@ -174,6 +181,30 @@ Without Docker the suite **skips with an explicit reason**; it never passes
 by pretending. Set `EXTENSIONLAB_E2E_DOCKER=1` (as CI does) to turn a missing
 Docker into a failure. `E2E_LOG_LEVEL=info` shows worker logs while debugging.
 
+## Billing
+
+Runbook material lives in [BILLING.md](BILLING.md); the short version:
+
+- **Health:** `GET /api/billing/plans` is public and reports
+  `billingEnabled` plus `purchasable` per plan — a quick check that price ids
+  are configured. Webhook health is visible in the provider dashboard's
+  delivery log and in `billing.webhook_*` metrics/log events.
+- **Payment issues:** users in `past_due_grace` keep paid features for
+  `BILLING_PAST_DUE_GRACE_DAYS`; the dashboard tells them to update the card
+  in the portal. No operator action is needed unless the provider stops
+  retrying.
+- **Replays:** re-sending an event from the provider dashboard is always
+  safe — the `billing_events` unique index makes it a `duplicate`.
+- **Manual intervention:** there is intentionally no admin API to set a
+  plan. Fix the subscription in the provider dashboard and let the webhook
+  (or a replay) update the app.
+- **Rotation:** rotate the webhook secret by adding a second endpoint,
+  switching `BILLING_WEBHOOK_SECRET`, then removing the old endpoint. Rotate
+  the API key by creating a new restricted key and restarting web + worker.
+- **Disabling billing:** `BILLING_PROVIDER=disabled` keeps all users on Free
+  and hides purchase actions; existing local subscriptions are ignored (not
+  deleted), and account deletion proceeds with a warning.
+
 ## Troubleshooting
 
 | Problem | Likely cause | Fix |
@@ -187,11 +218,16 @@ Docker into a failure. `E2E_LOG_LEVEL=info` shows worker logs while debugging.
 | Password reset e-mails not arriving | `EMAIL_PROVIDER=noop`, or provider failures | `email.failed` events with `errorCode`; retries follow the backoff policy; the job payload is redacted after completion. |
 | Orphaned containers | Worker killed without grace period | `docker rm -f` by label (above); sweeps also remove expired sandboxes. |
 | Disk fills up | Retention too long or cleanup not running | Check `cleanup.completed` events; lower `*_RETENTION_DAYS`; verify the scheduler is started (`WORKER_MODE` not `disabled`). |
+| Checkout return page never completes | Webhook rejected (`billing.webhook_rejected`) or unreachable endpoint | Verify `BILLING_WEBHOOK_SECRET` and that the proxy forwards the raw body; the confirm path also activates once the provider marks the session complete. |
+| Users get `503 BILLING_NOT_CONFIGURED` | `BILLING_PROVIDER=disabled` or missing keys/price ids | See `docs/BILLING.md` → Configuration; startup logs list the offending variable. |
+| `402 PAYMENT_REQUIRED` / `429 QUOTA_EXCEEDED` complaints from a paying user | Subscription not linked (`outcome: ignored` in webhook logs) | Check the `billing_customers` row for the user; replay the subscription event from the provider dashboard. |
 
 ## Release checklist
 
 1. `npm run typecheck && npm run lint && npm run test && npm run build`
 2. `npm run test:e2e` on a Docker-capable host (or the CI `docker-e2e` job)
+2b. Billing: one test-mode checkout against the real provider on staging
+    (checkout → webhook → dashboard shows the plan → cancel → reactivate)
 3. Build and push `web`, `worker` and `sandbox` images with the same tag
 4. Back up the database and storage
 5. Migrate, roll web, then worker; verify `/api/ready`

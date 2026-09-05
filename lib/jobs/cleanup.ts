@@ -12,6 +12,9 @@ import { listExpiredPackages, listOrphanedPackages } from "@/lib/db/repositories
 import { deleteOldReservations, releaseDanglingReservations, releaseReservationForResource } from "@/lib/db/repositories/quota";
 import { finalizeTestRunWithoutResults, listStaleActiveTestRuns } from "@/lib/db/repositories/test-runs";
 import { getRetentionConfig } from "@/lib/retention/config";
+import { getRetentionForUser } from "@/lib/billing/entitlements";
+import { listPlans } from "@/lib/billing/config";
+import { deleteOldBillingEvents, deleteOldCheckouts, expireStaleCheckouts } from "@/lib/db/repositories/billing";
 import { logger } from "@/lib/observability/logger";
 import type { ArtifactCleanupPayload } from "./types";
 
@@ -27,6 +30,8 @@ export interface CleanupReport {
   finishedJobsDeleted: number;
   staleRunsFinalized: number;
   reservationsReleased: number;
+  staleCheckoutsExpired: number;
+  billingEventsDeleted: number;
 }
 
 /**
@@ -51,6 +56,8 @@ export async function runCleanup(payload: ArtifactCleanupPayload = {}): Promise<
     finishedJobsDeleted: 0,
     staleRunsFinalized: 0,
     reservationsReleased: 0,
+    staleCheckoutsExpired: 0,
+    billingEventsDeleted: 0,
   };
 
   if (scope === "all" || scope === "artifacts") {
@@ -64,12 +71,29 @@ export async function runCleanup(payload: ArtifactCleanupPayload = {}): Promise<
     await step("packages", async () => {
       const { finalizePackageDeletion, reconcilePackages } = await import("@/lib/packages/service");
       const { setPackageStatus } = await import("@/lib/db/repositories/packages");
-      for (const row of listOrphanedPackages(now - retention.packageRetentionMs)) {
+      // Candidates are selected with the shortest retention of any plan, then
+      // each row is checked against its owner's actual plan window.
+      const shortestPackageRetentionMs = Math.min(
+        retention.packageRetentionMs,
+        ...listPlans().map((plan) => plan.packageRetentionDays * 24 * 60 * 60 * 1000),
+      );
+      const retentionCache = new Map<string, number>();
+      const ownerRetention = (userId: string) => {
+        let value = retentionCache.get(userId);
+        if (value === undefined) {
+          value = getRetentionForUser(userId).packageRetentionMs;
+          retentionCache.set(userId, value);
+        }
+        return value;
+      };
+      for (const row of listOrphanedPackages(now - shortestPackageRetentionMs)) {
+        if (row.created_at > now - ownerRetention(row.user_id)) continue;
         transaction(getDb(), () => setPackageStatus(row.id, "deleting"));
         await finalizePackageDeletion(row);
         report.orphanedPackages += 1;
       }
-      for (const row of listExpiredPackages(now - retention.packageRetentionMs)) {
+      for (const row of listExpiredPackages(now - shortestPackageRetentionMs)) {
+        if ((row.last_used_at ?? row.created_at) > now - ownerRetention(row.user_id)) continue;
         transaction(getDb(), () => setPackageStatus(row.id, "deleting"));
         await finalizePackageDeletion(row);
         report.expiredPackages += 1;
@@ -109,6 +133,17 @@ export async function runCleanup(payload: ArtifactCleanupPayload = {}): Promise<
       report.reservationsReleased = releaseDanglingReservations(now - 60 * 60 * 1000);
       deleteOldReservations(now - retention.jobRetentionMs);
       deleteStaleWorkers(now - 24 * 60 * 60 * 1000);
+    });
+  }
+
+  if (scope === "all" || scope === "billing") {
+    await step("billing", async () => {
+      // Checkout sessions expire on the provider after ~24h; mirror that locally.
+      report.staleCheckoutsExpired = expireStaleCheckouts(now - 24 * 60 * 60 * 1000);
+      deleteOldCheckouts(now - retention.jobRetentionMs);
+      // The event ledger only needs to outlive the provider's retry horizon
+      // (days); keep 90 days for audit/troubleshooting.
+      report.billingEventsDeleted = deleteOldBillingEvents(now - 90 * 24 * 60 * 60 * 1000);
     });
   }
 

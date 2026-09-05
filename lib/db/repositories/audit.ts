@@ -12,7 +12,19 @@ export type AuditEventType =
   | "share_created"
   | "share_revoked"
   | "package_delete"
-  | "test_run_cancel";
+  | "test_run_cancel"
+  // Phase 7 billing (details never contain payment data or secrets).
+  | "checkout_started"
+  | "subscription_created"
+  | "subscription_activated"
+  | "subscription_upgraded"
+  | "subscription_downgraded"
+  | "subscription_cancelled"
+  | "subscription_reactivated"
+  | "subscription_expired"
+  | "payment_succeeded"
+  | "payment_failed"
+  | "billing_state_changed";
 
 export function recordAuditEvent(input: {
   userId: string | null;

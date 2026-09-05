@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { apiErrorResponse, requireApiUser } from "@/lib/auth/api";
+import { apiErrorResponse, assertEntitled, requireApiUser } from "@/lib/auth/api";
 import { isSafeId } from "@/lib/auth/validation";
 import { AppError } from "@/lib/observability/errors";
 import { readOwnedArtifact } from "@/lib/artifacts/service";
+import { canUseAdvancedDiagnostics } from "@/lib/billing/entitlements";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +20,9 @@ export async function GET(request: NextRequest, context: { params: Promise<{ id:
     if (!isSafeId(id)) throw new AppError("NOT_FOUND", { message: "Artifact not found." });
     const artifact = await readOwnedArtifact(user.id, id);
     if (!artifact) throw new AppError("NOT_FOUND", { message: "Artifact not found." });
+    // Screenshots are part of every plan; runtime logs and network evidence
+    // downloads are an advanced-diagnostics entitlement.
+    if (artifact.row.type !== "screenshot") assertEntitled(canUseAdvancedDiagnostics(user.id));
     const download = new URL(request.url).searchParams.get("download") === "1";
     const extension = artifact.row.content_type === "image/png" ? "png" : "json";
     return new NextResponse(Buffer.from(artifact.bytes), {

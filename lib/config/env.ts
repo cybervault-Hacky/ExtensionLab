@@ -14,6 +14,7 @@ import { MAX_EXTENSION_SIZE } from "@/lib/extension/limits";
 export type AppEnv = "development" | "test" | "production";
 export type StorageProviderName = "local";
 export type EmailProviderName = "console" | "file" | "http" | "noop";
+type BillingProviderName = "stripe" | "fake" | "disabled";
 export type WorkerMode = "embedded" | "external" | "disabled";
 
 export interface AppConfig {
@@ -55,6 +56,25 @@ export interface AppConfig {
   resetDevDir: string | null;
   logLevel: "debug" | "info" | "warn" | "error";
   maxExtensionSize: number;
+  /** Phase 7 billing (see docs/BILLING.md). Secrets are never exposed by describeConfig(). */
+  billing: {
+    provider: BillingProviderName;
+    /** Provider API secret (Stripe restricted/secret key). */
+    secretKey: string | null;
+    /** Webhook signing secret. */
+    webhookSecret: string | null;
+    currency: string;
+    /** Provider price ids per paid plan; a paid plan is purchasable only when set. */
+    priceIds: { pro: string | null; business: string | null };
+    /** Display amounts in minor units per paid plan (informational; the provider price is authoritative). */
+    amounts: { pro: number | null; business: number | null };
+    /** Development/test only: the fake provider's shared webhook secret. */
+    fakeWebhookSecret: string | null;
+    /** How a paid subscription is handled when the owner deletes their account. */
+    deletionPolicy: "cancel_immediately" | "cancel_at_period_end";
+    /** Days a past_due subscription keeps paid entitlements while the provider retries payment. */
+    pastDueGraceDays: number;
+  };
   /** Requests per minute per client for the sensitive endpoints. */
   rateLimits: {
     login: number;
@@ -68,6 +88,11 @@ export interface AppConfig {
     shareCreate: number;
     publicReport: number;
     reportCreate: number;
+    billingRead: number;
+    billingCheckout: number;
+    billingPortal: number;
+    billingChange: number;
+    billingWebhook: number;
   };
 }
 
@@ -247,6 +272,47 @@ function buildConfig(): AppConfig {
 
   const logLevel = oneOf("LOG_LEVEL", ["debug", "info", "warn", "error"] as const, appEnv === "test" ? "warn" : "info", problems);
 
+  // Billing. The fake provider is for development/tests only and must be chosen
+  // explicitly; production never falls back to it.
+  const billingProvider = oneOf(
+    "BILLING_PROVIDER",
+    ["stripe", "fake", "disabled"] as const,
+    isProduction ? "disabled" : "fake",
+    problems,
+  );
+  const billingSecretKey = str("BILLING_SECRET_KEY") ?? null;
+  const billingWebhookSecret = str("BILLING_WEBHOOK_SECRET") ?? null;
+  const billingCurrency = (str("BILLING_CURRENCY") ?? "inr").toLowerCase();
+  if (!/^[a-z]{3}$/.test(billingCurrency)) problems.push("BILLING_CURRENCY must be a 3-letter ISO 4217 code");
+  const proPriceId = str("BILLING_PRO_PRICE_ID") ?? null;
+  const businessPriceId = str("BILLING_BUSINESS_PRICE_ID") ?? null;
+  const proAmount = str("BILLING_PRO_AMOUNT") !== undefined ? num("BILLING_PRO_AMOUNT", 0, problems, { min: 0 }) : null;
+  const businessAmount =
+    str("BILLING_BUSINESS_AMOUNT") !== undefined ? num("BILLING_BUSINESS_AMOUNT", 0, problems, { min: 0 }) : null;
+  const fakeWebhookSecret = str("BILLING_FAKE_WEBHOOK_SECRET") ?? null;
+  if (billingProvider === "stripe") {
+    if (!billingSecretKey) problems.push("BILLING_SECRET_KEY is required when BILLING_PROVIDER=stripe");
+    if (!billingWebhookSecret) problems.push("BILLING_WEBHOOK_SECRET is required when BILLING_PROVIDER=stripe");
+    if (!proPriceId && !businessPriceId) {
+      problems.push("At least one of BILLING_PRO_PRICE_ID / BILLING_BUSINESS_PRICE_ID is required when BILLING_PROVIDER=stripe");
+    }
+    if (isProduction && billingSecretKey && !/^(sk|rk)_live_/.test(billingSecretKey)) {
+      problems.push("BILLING_SECRET_KEY must be a live Stripe key in production");
+    }
+  }
+  if (billingProvider === "fake" && isProduction) {
+    problems.push("BILLING_PROVIDER=fake is not allowed in production");
+  }
+  if (isProduction && fakeWebhookSecret) {
+    problems.push("BILLING_FAKE_WEBHOOK_SECRET must not be set in production");
+  }
+  const deletionPolicy = oneOf(
+    "BILLING_DELETION_POLICY",
+    ["cancel_immediately", "cancel_at_period_end"] as const,
+    "cancel_immediately",
+    problems,
+  );
+
   const config: AppConfig = {
     appEnv,
     appUrl: appUrl.replace(/\/$/, ""),
@@ -286,6 +352,17 @@ function buildConfig(): AppConfig {
     resetDevDir,
     logLevel,
     maxExtensionSize: num("PLAN_MAX_EXTENSION_SIZE", MAX_EXTENSION_SIZE, problems, { min: 1024 }),
+    billing: {
+      provider: billingProvider,
+      secretKey: billingSecretKey,
+      webhookSecret: billingWebhookSecret,
+      currency: billingCurrency,
+      priceIds: { pro: proPriceId, business: businessPriceId },
+      amounts: { pro: proAmount, business: businessAmount },
+      fakeWebhookSecret,
+      deletionPolicy,
+      pastDueGraceDays: num("BILLING_PAST_DUE_GRACE_DAYS", 7, problems, { min: 0, max: 60 }),
+    },
     rateLimits: {
       login: num("RATE_LIMIT_LOGIN_PER_MIN", 30, problems, { min: 1 }),
       signup: num("RATE_LIMIT_SIGNUP_PER_MIN", 30, problems, { min: 1 }),
@@ -298,6 +375,12 @@ function buildConfig(): AppConfig {
       shareCreate: num("RATE_LIMIT_SHARE_CREATE_PER_MIN", 20, problems, { min: 1 }),
       publicReport: num("RATE_LIMIT_PUBLIC_REPORT_PER_MIN", 60, problems, { min: 1 }),
       reportCreate: num("RATE_LIMIT_REPORT_CREATE_PER_MIN", 30, problems, { min: 1 }),
+      billingRead: num("RATE_LIMIT_BILLING_READ_PER_MIN", 60, problems, { min: 1 }),
+      billingCheckout: num("RATE_LIMIT_BILLING_CHECKOUT_PER_MIN", 5, problems, { min: 1 }),
+      billingPortal: num("RATE_LIMIT_BILLING_PORTAL_PER_MIN", 5, problems, { min: 1 }),
+      billingChange: num("RATE_LIMIT_BILLING_CHANGE_PER_MIN", 10, problems, { min: 1 }),
+      // Keyed by source address; generous so provider retries are never dropped.
+      billingWebhook: num("RATE_LIMIT_BILLING_WEBHOOK_PER_MIN", 600, problems, { min: 1 }),
     },
   };
 
@@ -346,6 +429,13 @@ export function describeConfig(config: AppConfig = getConfig()): Record<string, 
       workerConcurrency: config.jobs.workerConcurrency,
     },
     emailProvider: config.email.provider,
+    billing: {
+      provider: config.billing.provider,
+      currency: config.billing.currency,
+      proConfigured: Boolean(config.billing.priceIds.pro),
+      businessConfigured: Boolean(config.billing.priceIds.business),
+      deletionPolicy: config.billing.deletionPolicy,
+    },
   };
 }
 

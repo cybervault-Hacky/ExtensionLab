@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Globe, Loader2, Lock, Play, TerminalSquare } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { PaywallNotice, paywallFromError, type PaywallInfo } from "@/components/billing/PaywallNotice";
+import type { ApiErrorPayload } from "@/components/billing/types";
 import type { CreateSandboxResponse, SandboxInfo } from "@/types/runtime";
 import type { ExtensionAnalysis } from "@/types/extension";
 
@@ -20,6 +22,7 @@ export function RuntimeLaunchCard({
   const [testUrl, setTestUrl] = useState("https://example.com");
   const [launching, setLaunching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [paywall, setPaywall] = useState<PaywallInfo | null>(null);
 
   const launch = async () => {
     if (!sourceFile) {
@@ -28,6 +31,7 @@ export function RuntimeLaunchCard({
     }
     setLaunching(true);
     setError(null);
+    setPaywall(null);
     try {
       const form = new FormData();
       form.append("file", sourceFile, sourceFile.name);
@@ -37,9 +41,12 @@ export function RuntimeLaunchCard({
         body: form,
       });
       if (!createResponse.ok) {
-        const body = (await createResponse.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
+        const body = (await createResponse.json().catch(() => null)) as ApiErrorPayload | null;
+        const limit = paywallFromError(body);
+        if (limit) {
+          setPaywall(limit);
+          return;
+        }
         setError(body?.error?.message ?? "The sandbox could not be created.");
         return;
       }
@@ -120,6 +127,7 @@ export function RuntimeLaunchCard({
         </Button>
       </div>
 
+      {paywall ? <PaywallNotice info={paywall} className="mt-4" /> : null}
       {error ? (
         <div className="mt-4 rounded-xl border border-[var(--status-error)] bg-[var(--status-error-soft)] p-3 text-sm text-[var(--text-primary)]">
           {error}

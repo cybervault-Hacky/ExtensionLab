@@ -4,13 +4,16 @@
 
 ExtensionLab is a premium browser-extension inspection and testing platform.
 Phase 1 provides a polished web experience for uploading a browser extension
-ZIP package and inspecting it locally in the browser. Phase 6 (current) turns
-the project into a production-deployable service: durable package storage, a
+ZIP package and inspecting it locally in the browser. Phase 6 turned the
+project into a production-deployable service: durable package storage, a
 persistent background job queue and worker, real Docker execution, validated
 configuration, e-mail delivery, structured logging, health/readiness probes,
-artifact retention and hardened container images. See
-[Phase 6](#phase-6-production-infrastructure--commercial-readiness) and
-`docs/`.
+artifact retention and hardened container images. Phase 7 (current) makes it
+a commercial SaaS: Free / Pro / Business plans, hosted checkout, provider
+subscriptions, webhook-driven entitlements, per-period usage limits, billing
+portal and invoices — with billing fully decoupled from the product. See
+[Phase 6](#phase-6-production-infrastructure--commercial-readiness),
+[Phase 7](#phase-7-plans-billing--entitlements) and `docs/`.
 
 **Phase 1 does not execute extensions.** It performs:
 
@@ -116,7 +119,14 @@ retries, cancellation, orphan recovery, quota reservations, the test-run
 pipeline with a fake sandbox, artifacts, e-mail delivery and password reset,
 configuration validation, CSP, rate-limit policy, error catalog/logging
 redaction, readiness, retention cleanup, account deletion and Docker
-hardening flags.
+hardening flags; and, for Phase 7 (`tests/phase7/`): plan catalog and
+environment overrides, the entitlement state machine (free / pro / trial /
+expired / cancelled / past-due grace), checkout → signed webhook → Pro,
+duplicate and tampered webhooks, cancel / reactivate / expiry, payment
+failure and recovery, billing-period usage reset, invoice isolation, provider
+failure handling, account deletion with an active subscription, the Stripe
+adapter against a mocked API, product-API 429/402 contracts, the quota race,
+plan-aware concurrency/priority, share gating and client-bundle hygiene.
 
 Phase 1 coverage:
 
@@ -276,10 +286,14 @@ pull requests it will:
 - **Phase 5 (implemented):** Accounts, persistent extension projects, analysis
   snapshots, test history, immutable reports, comparison, secure sharing,
   usage limits, settings, and account deletion.
-- **Phase 6 (current):** Production infrastructure — durable package storage,
+- **Phase 6 (implemented):** Production infrastructure — durable package storage,
   persistent job queue and worker, real Docker execution, configuration
   validation, e-mail delivery, structured logging, health/readiness, artifact
   retention, hardened images and a real-Docker E2E suite.
+- **Phase 7 (current):** Plans, billing and entitlements — Free/Pro/Business
+  catalog, provider-agnostic checkout and subscriptions, signed webhooks,
+  server-side entitlement service, billing-period usage limits, portal,
+  invoices, paywall UX and account-deletion cancellation.
 - **Later phases (planned):** Team collaboration, cloud managed history, and
   AI-assisted analysis.
 
@@ -646,6 +660,68 @@ Upload → Validate → Store package → Queue job → Worker → Docker sandbo
 - `docs/ARCHITECTURE.md` — request/job/sandbox flows and data model.
 - `docs/SECURITY.md` — trust boundaries, container hardening, CSP, logging.
 - `docs/OPERATIONS.md` — runbooks: worker, cleanup, E2E, troubleshooting.
+
+## Phase 7: Plans, Billing & Entitlements
+
+Phase 7 adds the commercial layer without changing how analysis, sandboxes or
+tests work.
+
+```text
+Free → pricing page → hosted checkout → provider subscription → signed webhook
+→ subscriptions table → entitlement service → product APIs (429 / 402 / 413)
+```
+
+### What changed
+
+- **Plans** (`lib/billing/plans.ts`): exactly Free, Pro and Business.
+  Limits are configuration-driven (`PLAN_<PLAN>_*`), prices are display
+  values from `BILLING_*_AMOUNT` / `BILLING_CURRENCY`, the charge is defined by
+  the provider price (`BILLING_<PLAN>_PRICE_ID`). Nothing is hardcoded as a
+  final price. Details: `docs/PLANS.md`.
+- **Entitlement service** (`lib/billing/entitlements.ts`): `canAnalyze`,
+  `canRunTests`, `canUploadPackage`, `canCreateShare`,
+  `canUseAdvancedDiagnostics`, `getMaxConcurrentRuns`, `hasPriorityExecution`,
+  `getRetentionForUser`, `getQuotaUsage`. Every product route goes through it;
+  the frontend never decides. Quota errors return
+  `429 QUOTA_EXCEEDED {currentUsage, limit, resetAt, requiredPlan}`; plan
+  gates return `402 PAYMENT_REQUIRED`; size gates `413`.
+- **Provider abstraction** (`lib/billing/provider.ts`, `providers/`): a
+  Stripe REST adapter (no SDK) and an in-memory fake for development/tests
+  behind one `BillingProvider` interface; `BILLING_PROVIDER=disabled` keeps
+  everyone on Free. The fake is rejected in production; production requires
+  live keys and validates all billing configuration at startup.
+- **Subscriptions** (`lib/db/migrations/003_phase7_billing.sql`):
+  `billing_customers`, `subscriptions`, `billing_events` (unique provider
+  event id → idempotent webhooks) and `checkout_sessions`. No card data, no
+  raw payloads. Existing `usage_events` / `quota_reservations` are reused;
+  paid users are measured inside their billing period, Free users per
+  calendar month.
+- **Flow**: `POST /api/billing/checkout {planId}` (server maps plan → price)
+  → provider → `/dashboard/billing/return` polls `POST /api/billing/confirm`
+  ("payment is being confirmed") → activation comes from provider
+  subscription objects via `POST /api/billing/webhook` (signature over the
+  raw body, 400 on missing/invalid/tampered/stale, 200 on duplicates, 5xx on
+  transient failures so the provider retries). Cancel at period end,
+  reactivate, hosted portal and provider invoice links are exposed under
+  `/api/billing/*` (session + same-origin + rate limits).
+- **Grace and downgrade**: failed renewals keep paid features for
+  `BILLING_PAST_DUE_GRACE_DAYS`; cancellation, expiry or past-due after grace
+  fall back to Free without deleting anything. Account deletion cancels the
+  provider subscription first and refuses to proceed if that fails.
+- **UI**: public `/pricing`, `/dashboard/billing` (plan, usage bars, billing
+  cycle, payment status, plans, actions, invoices), Billing nav item, subtle
+  plan badges, `PaywallNotice` with *View plans* wherever a limit is hit, and
+  reference ids on billing errors. No payment data ever reaches client
+  storage or URLs.
+
+### Documentation
+
+- `docs/BILLING.md` — architecture, data model, configuration, lifecycle,
+  webhooks, local testing with the fake provider, production setup, tax /
+  refunds, troubleshooting.
+- `docs/PLANS.md` — plan catalog, entitlement API and HTTP contract.
+- `docs/SECURITY.md`, `docs/DEPLOYMENT.md`, `docs/OPERATIONS.md`,
+  `docs/ARCHITECTURE.md` — updated for Phase 7.
 
 ## License
 

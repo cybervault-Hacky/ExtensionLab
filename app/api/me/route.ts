@@ -8,8 +8,7 @@ import {
   requireApiUser,
   requireSameOrigin,
 } from "@/lib/auth/api";
-import { getActivePlan } from "@/lib/db/plan";
-import { countUsageThisMonth } from "@/lib/db/repositories/usage";
+import { getEffectivePlan, getQuotaUsage } from "@/lib/billing/entitlements";
 import { getActiveUserSessions, clearSessionCookie, logoutAllSessions } from "@/lib/auth/session";
 import {
   findUserByEmail,
@@ -27,10 +26,14 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const user = requireApiUser(request);
-    const plan = getActivePlan();
-    const currentUser = user;
+    // Plan and usage come from the server-side entitlement service (verified
+    // subscription state); the browser never decides what it is entitled to.
+    const effective = getEffectivePlan(user.id);
+    const plan = effective.plan;
+    const analyses = getQuotaUsage(user.id, "analysis");
+    const testRuns = getQuotaUsage(user.id, "test_run");
     return NextResponse.json({
-      user: currentUser,
+      user,
       plan: {
         id: plan.id,
         name: plan.name,
@@ -39,10 +42,18 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         maxExtensionSize: plan.maxExtensionSize,
         maxConcurrentRuns: plan.maxConcurrentRuns,
         historyRetentionDays: plan.historyRetentionDays,
+        sharingEnabled: plan.sharingEnabled,
+        billingState: effective.state,
+        paidUntil: effective.paidUntil,
       },
       usage: {
-        analysisUsed: countUsageThisMonth(user.id, "analysis"),
-        testRunUsed: countUsageThisMonth(user.id, "test_run"),
+        analysisUsed: analyses.used,
+        testRunUsed: testRuns.used,
+        analysisReserved: analyses.reserved,
+        testRunReserved: testRuns.reserved,
+        resetAt: analyses.resetAt,
+        periodStart: analyses.period.start,
+        periodEnd: analyses.period.end,
       },
       activeSessions: getActiveUserSessions(user.id),
     });

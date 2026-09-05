@@ -10,7 +10,7 @@ import { runCleanup } from "@/lib/jobs/cleanup";
 
 async function main(): Promise<void> {
   getDb();
-  const scope = process.argv[2] as "all" | "artifacts" | "packages" | "auth" | "jobs" | undefined;
+  const scope = process.argv[2] as "all" | "artifacts" | "packages" | "auth" | "jobs" | "billing" | undefined;
   const report = await runCleanup(scope ? { scope } : {});
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }

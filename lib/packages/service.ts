@@ -20,6 +20,7 @@ import { StorageError } from "@/lib/storage/types";
 import { analyzeZipBytes } from "@/lib/extension/analyzer";
 import { ExtensionLabError } from "@/lib/extension/errors";
 import { MAX_EXTENSION_SIZE } from "@/lib/extension/limits";
+import { canUploadPackage } from "@/lib/billing/entitlements";
 import { AppError } from "@/lib/observability/errors";
 import { logger, recordMetric } from "@/lib/observability/logger";
 import type { ExtensionAnalysis } from "@/types/extension";
@@ -51,6 +52,11 @@ export async function storeExtensionPackage(input: {
   }
   if (input.bytes.byteLength > MAX_EXTENSION_SIZE) {
     throw new AppError("INVALID_EXTENSION", { message: "This file is larger than the 25 MB limit." });
+  }
+  const sizeEntitlement = canUploadPackage(input.userId, input.bytes.byteLength);
+  if (!sizeEntitlement.allowed) {
+    const mb = sizeEntitlement.reason === "size" ? Math.floor(sizeEntitlement.maxExtensionSize / (1024 * 1024)) : 0;
+    throw new AppError("PAYMENT_REQUIRED", { message: `This extension is larger than your plan's ${mb} MB limit.` });
   }
 
   let analysis: ExtensionAnalysis;

@@ -13,7 +13,7 @@ import {
 import { getStorage } from "@/lib/storage/storage";
 import { artifactStorageKey, sha256Hex } from "@/lib/storage/validation";
 import { StorageError } from "@/lib/storage/types";
-import { getRetentionConfig } from "@/lib/retention/config";
+import { getRetentionForUser } from "@/lib/billing/entitlements";
 import { testConfig } from "@/lib/testing/config";
 import { redactSensitiveText, redactUrlShallow } from "@/lib/runtime/redact";
 import { logger } from "@/lib/observability/logger";
@@ -39,7 +39,8 @@ export async function persistRunArtifacts(input: {
   network: NetworkEntryLike[];
 }): Promise<ArtifactSummary[]> {
   const created: ArtifactSummary[] = [];
-  const expiresAt = Date.now() + getRetentionConfig().artifactRetentionMs;
+  // Retention follows the owner's plan at the time the evidence is produced.
+  const expiresAt = Date.now() + getRetentionForUser(input.userId).artifactRetentionMs;
   const config = testConfig();
 
   for (const shot of input.screenshots.slice(0, config.MAX_SCREENSHOTS)) {

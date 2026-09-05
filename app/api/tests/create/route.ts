@@ -2,14 +2,8 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getClientIp, validateIncomingTestUrl } from "@/lib/runtime/api-helpers";
 import { MAX_EXTENSION_SIZE } from "@/lib/extension/limits";
-import {
-  ApiError,
-  apiErrorResponse,
-  badRequest,
-  requireApiUser,
-  requireSameOrigin,
-  requestIdFrom,
-} from "@/lib/auth/api";
+import { canUploadPackage } from "@/lib/billing/entitlements";
+import { ApiError, apiErrorResponse, assertEntitled, badRequest, requestIdFrom, requireApiUser, requireSameOrigin } from "@/lib/auth/api";
 import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
 import { getOwnedExtension } from "@/lib/db/repositories/extensions";
 import { isSafeId } from "@/lib/auth/validation";
@@ -49,6 +43,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       if (file.size > MAX_EXTENSION_SIZE) {
         throw new ApiError(400, "invalid_input", "This file is larger than the 25 MB limit.");
       }
+      // Plan-level size entitlement (never above the hard platform limit).
+      assertEntitled(canUploadPackage(user.id, file.size));
       const urlValue = typeof form.get("testUrl") === "string" ? (form.get("testUrl") as string) : "";
       const urlResult = await validateIncomingTestUrl(urlValue);
       if (!urlResult.ok) {

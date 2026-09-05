@@ -4,7 +4,7 @@ import { getDb, transaction } from "@/lib/db/client";
 import { attachJobToTestRun, createTestRun, getTestRunById, countActiveTestRunsForUser } from "@/lib/db/repositories/test-runs";
 import { getJobById, getJobForResource, listJobEvents, queuePosition, type JobRow } from "@/lib/db/repositories/jobs";
 import { releaseReservationForResource, reserveQuota } from "@/lib/db/repositories/quota";
-import { getActivePlan } from "@/lib/db/plan";
+import { getMaxConcurrentRuns, hasPriorityExecution } from "@/lib/billing/entitlements";
 import { attachPackageToExtension, touchPackage } from "@/lib/db/repositories/packages";
 import { enqueueJob, cancelJob } from "@/lib/jobs/queue";
 import { notifyEmbeddedWorker } from "@/lib/jobs/runtime";
@@ -55,13 +55,15 @@ export function createQueuedTestRun(input: {
   testUrl?: string;
 }): CreateRunResult {
   const config = getConfig();
-  const plan = getActivePlan();
   const { tests } = discoverTests(input.analysis);
   const token = generateSessionToken();
 
   const created = transaction(getDb(), () => {
+    // Plan entitlements are read inside the transaction so a concurrent
+    // downgrade cannot be raced; JOB_MAX_QUEUED_PER_USER remains the floor.
+    const maxActive = Math.max(getMaxConcurrentRuns(input.userId), config.jobs.maxQueuedPerUser);
     const active = countActiveTestRunsForUser(input.userId);
-    if (active >= Math.max(plan.maxConcurrentRuns, config.jobs.maxQueuedPerUser)) {
+    if (active >= maxActive) {
       throw new AppError("CONCURRENCY_LIMIT");
     }
     const run = createTestRun({
@@ -88,6 +90,9 @@ export function createQueuedTestRun(input: {
       resourceType: "test_run",
       resourceId: run.id,
       idempotencyKey: `test_run:${run.id}`,
+      maxActivePerUser: maxActive,
+      // Plans with priority execution are claimed ahead of the default queue.
+      priority: hasPriorityExecution(input.userId) ? 10 : 0,
     });
     attachJobToTestRun(run.id, job.id);
     getDb()
