@@ -1,0 +1,16 @@
+{
+  "name": "extensionlab-sandbox-runner",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build": "tsc -p ../tsconfig.build.json",
+    "start": "node dist/runner/index.js"
+  },
+  "dependencies": {
+    "chrome-remote-interface": "^0.33.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3"
+  }
+}

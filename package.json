@@ -1,0 +1,41 @@
+{
+  "name": "extensionlab",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ExtensionLab - a premium browser-extension inspection and testing platform.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p sandbox/tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck:app": "tsc --noEmit",
+    "typecheck:sandbox": "tsc --noEmit -p sandbox/tsconfig.json",
+    "db:migrate": "node scripts/db-migrate.mjs"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.4.5",
+    "jszip": "^3.10.1",
+    "lucide-react": "^0.469.0",
+    "next": "^15.1.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/react": "^19.0.7",
+    "@types/react-dom": "^19.0.3",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^15.1.6",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8",
+    "chrome-remote-interface": "^0.33.3"
+  }
+}
