@@ -15,12 +15,20 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { exportTestResults, copySummary } from "@/lib/testing/diagnostics";
+import { runHasExecutedTests, runOutcomeLabel } from "@/lib/testing/status-labels";
 import type { DiagnosticFinding, TestResult, TestScore } from "@/lib/testing/types";
+import { AnalyzeRuntimeErrors, AnalyzeTestFailure } from "@/components/ai/AIFeatures";
+import { AIBadge, VerifiedBadge, evidenceAnchor } from "@/components/ai/AIPanel";
+import type { AIEvidenceRef } from "@/components/ai/types";
 
 interface PersistedRun {
   run: {
     runId: string;
     status: string;
+    stage?: string | null;
+    outcome?: string | null;
+    errorCode?: string | null;
+    reason?: string | null;
     score: number;
     total: number;
     passed: number;
@@ -39,6 +47,7 @@ interface PersistedRun {
   results: TestResult[];
   score: TestScore;
   diagnostics: DiagnosticFinding[];
+  artifacts?: Array<{ id: string; type: string; size: number; createdAt: number; expiresAt: number | null }>;
   export: Record<string, unknown>;
 }
 
@@ -51,6 +60,33 @@ export function PersistentTestRunView({ runId }: { runId: string }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [createdId, setCreatedId] = useState<string | null>(null);
+  const [aiAvailable, setAiAvailable] = useState<boolean | null>(null);
+
+  // Deployment-level AI availability only; no AI request happens on load.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/me")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: { ai?: { available?: boolean } } | null) => {
+        if (!cancelled) setAiAvailable(Boolean(payload?.ai?.available));
+      })
+      .catch(() => {
+        if (!cancelled) setAiAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const jumpToEvidence = useCallback((ref: AIEvidenceRef) => {
+    if (ref.kind === "test") setExpanded(ref.id);
+    const anchor = evidenceAnchor(ref);
+    if (!anchor) return;
+    requestAnimationFrame(() => {
+      const element = document.getElementById(anchor);
+      if (element) element.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -143,6 +179,10 @@ export function PersistentTestRunView({ runId }: { runId: string }) {
     );
   };
 
+  const executed = runHasExecutedTests({ status: data.run.status, outcome: data.run.outcome, failed: data.run.failed, error_count: data.run.error, timeout: data.run.timeout, warnings: data.run.warnings });
+  const outcomeLabel = runOutcomeLabel({ status: data.run.status, outcome: data.run.outcome, failed: data.run.failed, error_count: data.run.error, timeout: data.run.timeout, warnings: data.run.warnings });
+  const screenshots = (data.artifacts ?? []).filter((artifact) => artifact.type === "screenshot");
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -150,7 +190,9 @@ export function PersistentTestRunView({ runId }: { runId: string }) {
           <p className="eyebrow">Automated Test Report</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">{data.run.extensionName ?? "Automated Test Report"}</h1>
           <p className="mt-2 text-sm text-[var(--text-secondary)]">
-            Score {data.run.score}/100 · {data.run.passed} passed · {data.run.failed + data.run.error} failed · {data.run.warnings} warning · {data.run.skipped} skipped
+            {executed
+              ? `${outcomeLabel} · Score ${data.run.score}/100 · ${data.run.passed} passed · ${data.run.failed + data.run.error} failed · ${data.run.warnings} warning · ${data.run.skipped} skipped`
+              : `${outcomeLabel} · no automated tests were executed`}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -180,12 +222,38 @@ export function PersistentTestRunView({ runId }: { runId: string }) {
         </div>
       ) : null}
 
+      {!executed ? (
+        <div className="rounded-xl border border-[var(--status-warning)] bg-[var(--status-warning-soft)] p-4 text-sm" role="status">
+          <p className="font-semibold text-[var(--text-primary)]">
+            {data.run.outcome === "CANCELLED" ? "This run was cancelled" : "Infrastructure error — this run has no test results"}
+          </p>
+          <p className="mt-1 text-[var(--text-secondary)]">
+            {data.run.reason ?? "The isolated browser could not be started. Static analysis results are unaffected; retry the automated tests once the sandbox is available."}
+          </p>
+        </div>
+      ) : null}
+
       <div className="card card-pad grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Stat label="Passed" value={data.run.passed} tone="success" />
         <Stat label="Failed" value={data.run.failed + data.run.error + data.run.timeout} tone="error" />
         <Stat label="Warnings" value={data.run.warnings} tone="warning" />
-        <Stat label="Score" value={`${data.run.score}/100`} accent />
+        <Stat label="Score" value={executed ? `${data.run.score}/100` : "n/a"} accent />
       </div>
+
+      {screenshots.length > 0 ? (
+        <Card>
+          <h2 className="text-base font-semibold tracking-tight">Screenshots</h2>
+          <p className="mt-1 text-xs text-[var(--text-secondary)]">Captured inside the isolated browser. Private to your account.</p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {screenshots.map((artifact) => (
+              <a key={artifact.id} href={`/api/artifacts/${artifact.id}`} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-xl border border-[var(--border)]">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={`/api/artifacts/${artifact.id}`} alt="Sandbox screenshot" className="h-40 w-full object-cover" loading="lazy" />
+              </a>
+            ))}
+          </div>
+        </Card>
+      ) : null}
 
       <div className="card overflow-hidden">
         <div className="border-b border-[var(--border)] p-4">
@@ -205,7 +273,7 @@ export function PersistentTestRunView({ runId }: { runId: string }) {
             <p className="p-6 text-center text-sm text-[var(--text-secondary)]">No matching tests.</p>
           ) : null}
           {filtered.map((result) => (
-            <div key={result.testId}>
+            <div key={result.testId} id={evidenceAnchor({ kind: "test", id: result.testId, label: result.name }) ?? undefined}>
               <button
                 type="button"
                 onClick={() => setExpanded(expanded === result.testId ? null : result.testId)}
@@ -245,6 +313,15 @@ export function PersistentTestRunView({ runId }: { runId: string }) {
                       </ul>
                     </div>
                   ) : null}
+                  {aiAvailable !== false && ["failed", "error", "timeout", "warning"].includes(result.status) ? (
+                    <div className="mt-4 border-t border-[var(--border)] pt-3">
+                      <div className="mb-2 flex items-center gap-2">
+                        <AIBadge>AI interpretation</AIBadge>
+                        <span className="text-xs text-[var(--text-secondary)]">Deterministic results above are unaffected.</span>
+                      </div>
+                      <AnalyzeTestFailure runId={runId} testId={result.testId} onJump={jumpToEvidence} />
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -253,22 +330,34 @@ export function PersistentTestRunView({ runId }: { runId: string }) {
       </div>
 
       <Card>
-        <div className="flex items-center gap-2">
-          <FlaskConical className="h-5 w-5 text-[var(--text-secondary)]" aria-hidden="true" />
-          <h2 className="text-base font-semibold tracking-tight">Diagnostics</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <FlaskConical className="h-5 w-5 text-[var(--text-secondary)]" aria-hidden="true" />
+            <h2 className="text-base font-semibold tracking-tight">Diagnostics</h2>
+          </div>
+          <VerifiedBadge />
         </div>
         {data.diagnostics.length === 0 ? (
           <p className="mt-3 text-sm text-[var(--text-secondary)]">No diagnostic findings.</p>
         ) : (
           <div className="mt-4 space-y-3">
             {data.diagnostics.map((finding) => (
-              <div key={finding.id} className="rounded-xl border border-[var(--border)] p-3">
+              <div key={finding.id} id={evidenceAnchor({ kind: "diagnostic", id: finding.id, label: finding.title }) ?? undefined} className="rounded-xl border border-[var(--border)] p-3">
                 <p className="text-sm font-medium">{finding.title}</p>
                 <p className="mt-1 text-sm text-[var(--text-secondary)]">{finding.description}</p>
               </div>
             ))}
           </div>
         )}
+        {aiAvailable !== false && executed && (data.run.failed > 0 || data.run.error > 0 || data.run.timeout > 0 || data.run.warnings > 0) ? (
+          <div className="mt-4 border-t border-[var(--border)] pt-4">
+            <div className="mb-2 flex items-center gap-2">
+              <AIBadge>AI interpretation</AIBadge>
+              <span className="text-xs text-[var(--text-secondary)]">Optional analysis of captured runtime errors and failed requests.</span>
+            </div>
+            <AnalyzeRuntimeErrors runId={runId} onJump={jumpToEvidence} />
+          </div>
+        ) : null}
       </Card>
     </div>
   );

@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, lint, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      APP_ENV: test
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+      - name: Migrations apply cleanly on a fresh database
+        run: DATABASE_URL=sqlite:/tmp/ci-fresh.sqlite npm run db:migrate && DATABASE_URL=sqlite:/tmp/ci-fresh.sqlite npm run db:migrate:status
+
+  docker-e2e:
+    name: Docker end-to-end (real sandbox)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: verify
+    env:
+      APP_ENV: test
+      NEXT_TELEMETRY_DISABLED: "1"
+      SANDBOX_IMAGE: extensionlab-sandbox:ci
+      EXTENSIONLAB_E2E_DOCKER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build pinned sandbox image
+        run: docker build -f sandbox/Dockerfile -t "$SANDBOX_IMAGE" .
+      - name: Run Docker E2E suite
+        run: npm run test:e2e
+      - name: Verify no sandbox containers are left behind
+        if: always()
+        run: |
+          left="$(docker ps -a --filter label=extensionlab.sandbox=1 -q | wc -l)"
+          echo "sandbox containers remaining: $left"
+          test "$left" -eq 0
+
+  image-build:
+    name: Build application images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: web
+          push: false
+          tags: extensionlab-web:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build worker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: worker
+          push: false
+          tags: extensionlab-worker:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

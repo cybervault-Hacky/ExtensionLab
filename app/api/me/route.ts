@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { deleteAccount } from "@/lib/account/deletion";
 import {
   ApiError,
   apiErrorResponse,
@@ -7,20 +8,18 @@ import {
   requireApiUser,
   requireSameOrigin,
 } from "@/lib/auth/api";
-import { getActivePlan } from "@/lib/db/plan";
-import { countUsageThisMonth } from "@/lib/db/repositories/usage";
+import { getEffectivePlan, getQuotaUsage } from "@/lib/billing/entitlements";
+import { isAIEnabled } from "@/lib/ai/provider";
 import { getActiveUserSessions, clearSessionCookie, logoutAllSessions } from "@/lib/auth/session";
 import {
   findUserByEmail,
   findUserById,
   updateUserPassword,
   updateUserProfile,
-  deleteUser,
 } from "@/lib/db/repositories/users";
 import { verifyPassword, hashPassword } from "@/lib/auth/password";
 import { normalizeEmail, isValidEmail, validateName, validatePassword } from "@/lib/auth/validation";
 import { recordAuditEvent } from "@/lib/db/repositories/audit";
-import { transaction, getDb } from "@/lib/db/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,10 +27,15 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const user = requireApiUser(request);
-    const plan = getActivePlan();
-    const currentUser = user;
+    // Plan and usage come from the server-side entitlement service (verified
+    // subscription state); the browser never decides what it is entitled to.
+    const effective = getEffectivePlan(user.id);
+    const plan = effective.plan;
+    const analyses = getQuotaUsage(user.id, "analysis");
+    const testRuns = getQuotaUsage(user.id, "test_run");
+    const aiRequests = getQuotaUsage(user.id, "ai_request");
     return NextResponse.json({
-      user: currentUser,
+      user,
       plan: {
         id: plan.id,
         name: plan.name,
@@ -40,10 +44,25 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         maxExtensionSize: plan.maxExtensionSize,
         maxConcurrentRuns: plan.maxConcurrentRuns,
         historyRetentionDays: plan.historyRetentionDays,
+        sharingEnabled: plan.sharingEnabled,
+        // Phase 8: plan-level AI entitlement (the server still decides per request).
+        aiEnabled: plan.aiEnabled && plan.aiRequestLimit > 0,
+        aiRequestLimit: plan.aiEnabled ? plan.aiRequestLimit : 0,
+        billingState: effective.state,
+        paidUntil: effective.paidUntil,
       },
+      /** Deployment-level availability; false when no AI provider is configured. */
+      ai: { available: isAIEnabled() },
       usage: {
-        analysisUsed: countUsageThisMonth(user.id, "analysis"),
-        testRunUsed: countUsageThisMonth(user.id, "test_run"),
+        analysisUsed: analyses.used,
+        testRunUsed: testRuns.used,
+        analysisReserved: analyses.reserved,
+        testRunReserved: testRuns.reserved,
+        aiUsed: aiRequests.used,
+        aiReserved: aiRequests.reserved,
+        resetAt: analyses.resetAt,
+        periodStart: analyses.period.start,
+        periodEnd: analyses.period.end,
       },
       activeSessions: getActiveUserSessions(user.id),
     });
@@ -103,9 +122,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
     }
 
     recordAuditEvent({ userId: user.id, type: "account_delete", detail: "Account and owned data deleted." });
-    transaction(getDb(), () => {
-      deleteUser(user.id);
-    });
+    await deleteAccount(user.id);
 
     const response = NextResponse.json({ ok: true });
     clearSessionCookie(response);

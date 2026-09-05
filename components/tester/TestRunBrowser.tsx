@@ -3,39 +3,29 @@
 import { useEffect, useState } from "react";
 import { AutomatedTestRunView } from "./AutomatedTestRunView";
 import { PersistentTestRunView } from "./PersistentTestRunView";
+import { isActiveRunStatus } from "@/lib/testing/status-labels";
 
-const LIVE_STATES = new Set([
-  "idle",
-  "preparing",
-  "starting",
-  "running",
-  "stopping",
-]);
-
+/**
+ * Chooses between the live view (queued/running) and the persisted report
+ * (terminal). Phase 6 stores every run in the database, so a page refresh,
+ * a new tab or a web restart never loses a run: access is based on session
+ * ownership; the legacy per-run token is only kept for Phase 4 clients.
+ */
 export function TestRunBrowser({ runId }: { runId: string }) {
   const [live, setLive] = useState<boolean | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const token = window.sessionStorage.getItem(`extensionlab:test-token:${runId}`);
 
     async function resolve() {
-      let persisted: { status?: string } | null = null;
-      const response = await fetch(`/api/tests/${runId}`).catch(() => null);
+      const response = await fetch(`/api/tests/${runId}`, { cache: "no-store" }).catch(() => null);
+      if (cancelled) return;
       if (response?.ok) {
         const body = (await response.json()) as { run?: { status?: string } };
-        persisted = body.run ?? null;
-      }
-
-      if (cancelled) return;
-      if (token && persisted && LIVE_STATES.has(persisted.status ?? "")) {
-        setLive(true);
-        return;
-      }
-      // Either there is no live token, the run is terminal (including a stale
-      // token after a server restart), or the persisted run is the source of
-      // truth. Fall back to the persistent report view.
-      if (token && persisted && !LIVE_STATES.has(persisted.status ?? "")) {
+        if (isActiveRunStatus(body.run?.status)) {
+          setLive(true);
+          return;
+        }
         window.sessionStorage.removeItem(`extensionlab:test-token:${runId}`);
       }
       setLive(false);
@@ -56,5 +46,5 @@ export function TestRunBrowser({ runId }: { runId: string }) {
     );
   }
 
-  return live ? <AutomatedTestRunView runId={runId} /> : <PersistentTestRunView runId={runId} />;
+  return live ? <AutomatedTestRunView runId={runId} onFinished={() => setLive(false)} /> : <PersistentTestRunView runId={runId} />;
 }

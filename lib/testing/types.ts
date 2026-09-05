@@ -36,6 +36,7 @@ export type TestSeverity = "info" | "low" | "medium" | "high" | "critical";
 
 export type TestRunState =
   | "idle"
+  | "queued"
   | "preparing"
   | "starting"
   | "running"
@@ -44,6 +45,31 @@ export type TestRunState =
   | "timeout"
   | "stopping"
   | "destroyed";
+
+/**
+ * Human-readable pipeline stages (Phase 6). Stages are reported as they
+ * actually happen; the UI never derives a fabricated percentage from them.
+ */
+export type TestRunStage =
+  | "Queued"
+  | "Preparing"
+  | "Starting sandbox"
+  | "Starting Chromium"
+  | "Loading extension"
+  | "Running tests"
+  | "Collecting evidence"
+  | "Generating report"
+  | "Completed";
+
+/** Final semantic outcome of a run. */
+export type TestRunOutcome =
+  | "PASSED"
+  | "FAILED"
+  | "WARNING"
+  | "SKIPPED"
+  | "TIMEOUT"
+  | "INFRASTRUCTURE_ERROR"
+  | "CANCELLED";
 
 export type TestActionType =
   | "open_url"
@@ -187,12 +213,28 @@ export interface TestRunInfo {
   error: number;
   score: number;
   reason?: string;
+  /** Phase 6: current pipeline stage. */
+  stage?: TestRunStage;
+  /** Phase 6: final semantic outcome; absent while the run is active. */
+  outcome?: TestRunOutcome;
+  /** Phase 6: stable error code when the run ended abnormally. */
+  errorCode?: string;
+  /** Phase 6: background job id (safe to expose; non-guessable). */
+  jobId?: string;
+}
+
+export interface CapturedScreenshot {
+  testId: string;
+  capturedAt: number;
+  bytes: Uint8Array;
 }
 
 export interface TestRunSnapshot {
   runId: string;
   token: string;
   sandboxId?: string;
+  /** Session token of the sandbox created for this run (never exposed). */
+  sandboxToken?: string;
   sourcePath: string;
   testUrl?: string;
   tests?: TestCase[];
@@ -207,6 +249,12 @@ export interface TestRunSnapshot {
   diagnostics: DiagnosticFinding[];
   score: TestScore;
   reason?: string;
+  /** Phase 6 additions. */
+  stage?: TestRunStage;
+  errorCode?: string;
+  screenshots?: CapturedScreenshot[];
+  network?: NetworkEntryLike[];
+  runtimeEvents?: RuntimeEventLike[];
 }
 
 export interface TestScoreCategory {

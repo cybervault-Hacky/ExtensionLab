@@ -3,15 +3,15 @@ import type { NextRequest } from "next/server";
 import {
   ApiError,
   apiErrorResponse,
+  assertEntitled,
   badRequest,
   requireApiUser,
   requireSameOrigin,
-  usageLimit,
 } from "@/lib/auth/api";
 import { getClientIp } from "@/lib/runtime/api-helpers";
-import { checkRateLimit } from "@/lib/auth/rate-limit";
-import { getActivePlan } from "@/lib/db/plan";
-import { usageLimitReached, recordUsage } from "@/lib/db/repositories/usage";
+import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
+import { canAnalyze } from "@/lib/billing/entitlements";
+import { recordUsage } from "@/lib/db/repositories/usage";
 import {
   createExtension,
   deleteExtension,
@@ -72,14 +72,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     requireSameOrigin(request);
     const user = requireApiUser(request);
-    const plan = getActivePlan();
     const ip = getClientIp(request);
-    const authLimit = checkRateLimit(`analysis:${user.id}:${ip}`, 30, 60 * 1000);
+    const authLimit = enforceRateLimit("upload", `${user.id}:${ip}`);
     if (!authLimit.ok) throw new ApiError(429, "rate_limited", "Too many analyses. Please wait and try again.");
 
-    if (usageLimitReached(user.id, "analysis", plan.analysisLimit)) {
-      throw usageLimit("analysis");
-    }
+    // Entitlement check first: an invalid payload below never consumes usage.
+    assertEntitled(canAnalyze(user.id));
 
     const contentType = request.headers.get("content-type") ?? "";
     if (!contentType.includes("application/json")) {

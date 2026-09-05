@@ -1,19 +1,22 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { getTestRunManager } from "@/lib/testing/manager-instance";
 import { getSandboxToken } from "@/lib/runtime/api-helpers";
 import { apiErrorResponse, requireApiUser } from "@/lib/auth/api";
+import { isSafeId } from "@/lib/auth/validation";
+import { AppError } from "@/lib/observability/errors";
+import { buildRunInfo, resolveAccessibleRun } from "@/lib/testing/run-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest, context: { params: Promise<{ runId: string }> }): Promise<NextResponse> {
   try {
-    requireApiUser(request);
+    const user = requireApiUser(request);
     const { runId } = await context.params;
-    const info = getTestRunManager().getStatus(runId, getSandboxToken(request));
-    return NextResponse.json(info);
+    if (!isSafeId(runId)) throw new AppError("NOT_FOUND", { message: "Test run was not found." });
+    const run = resolveAccessibleRun(user.id, runId, getSandboxToken(request));
+    return NextResponse.json(buildRunInfo(run), { headers: { "cache-control": "no-store" } });
   } catch (error) {
-    return apiErrorResponse(error);
+    return apiErrorResponse(error, request);
   }
 }

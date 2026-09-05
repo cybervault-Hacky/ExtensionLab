@@ -2,12 +2,15 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Logo } from "@/components/layout/Logo";
+import { safeNextPath } from "@/lib/auth/next-path";
 
 export function SignupForm() {
   const router = useRouter();
+  const search = useSearchParams();
+  const next = safeNextPath(search.get("next"));
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -29,7 +32,7 @@ export function SignupForm() {
         setError(body?.error?.message ?? "Account creation could not be completed.");
         return;
       }
-      router.replace("/dashboard");
+      router.replace(next);
     } catch {
       setError("We could not reach the server. Please try again.");
     } finally {

@@ -1,3 +1,10 @@
+# Development compose file.
+#
+#   docker compose --profile run-once build sandbox-image   # build the pinned sandbox image once
+#   docker compose up web                                    # web + embedded worker on :3000
+#
+# For production use docker-compose.prod.yml (separate web and worker services,
+# hardened settings). Never expose the Docker socket to the web container.
 services:
   sandbox-image:
     build:
@@ -8,21 +15,36 @@ services:
     command: ["true"]
 
   web:
-    build: .
-    command: npm run dev
+    build:
+      context: .
+      target: build
+    command: sh -c "node scripts/db-migrate.mjs && npm run dev"
     ports:
       - "3000:3000"
     environment:
       PORT: "3000"
+      APP_ENV: development
+      APP_URL: http://localhost:3000
+      DATABASE_URL: sqlite:/data/extensionlab.sqlite
+      STORAGE_PATH: /data/storage
+      WORKER_MODE: embedded
+      EMAIL_PROVIDER: console
       SANDBOX_IMAGE: extensionlab-sandbox:local
-      SANDBOX_MAX_RUNTIME: "120"
+      SANDBOX_TIMEOUT: "120"
       SANDBOX_MEMORY_LIMIT: "768m"
       SANDBOX_CPU_LIMIT: "0.5"
-      SANDBOX_MAX_CONCURRENT: "2"
+      SANDBOX_MAX_CONCURRENCY: "2"
       SANDBOX_NETWORK_MODE: restricted
     volumes:
       - .:/app
       - /app/node_modules
       - /app/.next
+      - dev-data:/data
+      # Development only: the embedded worker needs the Docker daemon to create
+      # sandboxes. In production the worker runs as a separate service.
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - sandbox-image
+
+volumes:
+  dev-data:

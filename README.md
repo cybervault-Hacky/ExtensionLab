@@ -4,7 +4,21 @@
 
 ExtensionLab is a premium browser-extension inspection and testing platform.
 Phase 1 provides a polished web experience for uploading a browser extension
-ZIP package and inspecting it locally in the browser.
+ZIP package and inspecting it locally in the browser. Phase 6 turned the
+project into a production-deployable service: durable package storage, a
+persistent background job queue and worker, real Docker execution, validated
+configuration, e-mail delivery, structured logging, health/readiness probes,
+artifact retention and hardened container images. Phase 7 makes it a
+commercial SaaS: Free / Pro / Business plans, hosted checkout, provider
+subscriptions, webhook-driven entitlements, per-period usage limits, billing
+portal and invoices — with billing fully decoupled from the product. Phase 8
+(current) adds an optional, explainable AI assistance layer: on-demand
+explanations of findings, test failures and runtime errors, report summaries,
+validated test suggestions and scoped questions about a report — always
+labelled as AI interpretation next to the deterministic, verified results.
+See [Phase 6](#phase-6-production-infrastructure--commercial-readiness),
+[Phase 7](#phase-7-plans-billing--entitlements),
+[Phase 8](#phase-8-ai-assistance) and `docs/`.
 
 **Phase 1 does not execute extensions.** It performs:
 
@@ -65,9 +79,20 @@ production-build errors.
 
 ## Start production
 
+The build uses Next.js `output: "standalone"`, so production runs the
+generated server directly (not `next start`):
+
 ```bash
-npm run start
+npm run build
+npm run db:migrate
+HOSTNAME=0.0.0.0 PORT=3000 node .next/standalone/server.js   # web
+npm run worker                                              # background worker (separate process)
 ```
+
+Production requires `APP_ENV=production`, an `https://` `APP_URL`, a
+`SESSION_SECRET` of at least 32 characters and an explicit `EMAIL_PROVIDER`
+(`http` or `noop`); startup fails closed otherwise. `npm run start` remains
+available for local checks only. See `docs/DEPLOYMENT.md`.
 
 ## Lint
 
@@ -84,10 +109,38 @@ npm run typecheck
 ## Test
 
 ```bash
-npm run test
+npm run test        # unit + integration (no Docker required)
+npm run test:e2e    # real-Docker end-to-end suite (skips itself when Docker is unavailable)
 ```
 
-The test suite covers:
+The end-to-end suite (`tests/e2e/`) runs the full pipeline against a real
+sandbox container and skips with an explicit reason when Docker or the
+sandbox image is missing. Set `EXTENSIONLAB_E2E_DOCKER=1` (CI does) to make an
+unavailable Docker a hard failure instead of a skip. See `docs/OPERATIONS.md`.
+
+The unit/integration suite covers the Phase 1–5 behaviour below plus, for
+Phase 6: storage provider and package lifecycle, the job queue, worker,
+retries, cancellation, orphan recovery, quota reservations, the test-run
+pipeline with a fake sandbox, artifacts, e-mail delivery and password reset,
+configuration validation, CSP, rate-limit policy, error catalog/logging
+redaction, readiness, retention cleanup, account deletion and Docker
+hardening flags; and, for Phase 7 (`tests/phase7/`): plan catalog and
+environment overrides, the entitlement state machine (free / pro / trial /
+expired / cancelled / past-due grace), checkout → signed webhook → Pro,
+duplicate and tampered webhooks, cancel / reactivate / expiry, payment
+failure and recovery, billing-period usage reset, invoice isolation, provider
+failure handling, account deletion with an active subscription, the Stripe
+adapter against a mocked API, product-API 429/402 contracts, the quota race,
+plan-aware concurrency/priority, share gating and client-bundle hygiene; and,
+for Phase 8 (`tests/phase8/`): the OpenAI-compatible adapter against a mocked
+`fetch`, every fake-provider failure scenario through the real service,
+redaction and prompt-injection fixtures asserted on the prompts the provider
+mock received, context allowlisting/minimization, strict output validation
+and evidence filtering, test-suggestion safety, plan/quota/ownership/share
+rules on all six AI routes, retention, deletion and bundle hygiene. No test
+calls a real AI provider.
+
+Phase 1 coverage:
 
 - Valid manifest V3
 - Valid manifest V2 with informational compatibility warning
@@ -189,7 +242,11 @@ The app also runs pending migrations lazily on first database access, so
 `npm run dev` is sufficient for local work.
 
 The database file defaults to `data/extensionlab.sqlite` and can be overridden
-with `EXTENSIONLAB_DB_PATH` or `DATABASE_PATH`.
+with `DATABASE_URL=sqlite:/path/to/file.sqlite` (Phase 6) or the legacy
+`EXTENSIONLAB_DB_PATH` / `DATABASE_PATH` variables. `npm run db:migrate:status`
+lists pending migrations without applying them. Migration
+`002_phase6_infrastructure.sql` only adds tables and nullable columns; existing
+Phase 5 rows are never modified or deleted.
 
 ## Deployment
 
@@ -199,24 +256,33 @@ persistent database.
 
 ```bash
 npm run build
-npm run start
+npm run db:migrate
+node .next/standalone/server.js     # web (HOSTNAME/PORT from the environment)
+npm run worker                      # worker, on a Docker-capable host
 ```
 
-Deploy `npm run start` behind any Node-compatible host that provides a
-persistent writable filesystem, or point `EXTENSIONLAB_DB_PATH` at a managed
-volume. Reports, test runs, auth cookies, and account data require a real
-server.
+Deploy behind a TLS-terminating reverse proxy on a host that provides a
+persistent writable volume for the SQLite database and package/artifact
+storage. Automated tests additionally require a Docker-capable host for the
+worker. `docker-compose.prod.yml` and the root `Dockerfile` (`web` and
+`worker` targets) provide a reference deployment; `docs/DEPLOYMENT.md`
+documents every environment variable, migrations, backups, health checks and
+PostgreSQL notes.
 
 ## GitHub Actions
 
-The repository includes `.github/workflows/ci.yml`. On push and pull requests
-it will:
+The CI definition is `ci.yml` (shipped at `.github/workflows-pending/ci.yml`
+until a maintainer with workflow permissions moves it to
+`.github/workflows/ci.yml` — see the README in that directory). On push and
+pull requests it will:
 
-1. Install dependencies
-2. Run lint
-3. Run typecheck
-4. Run tests
-5. Run the production build
+1. Install dependencies from the lockfile
+2. Run typecheck, lint, the unit/integration tests and the production build
+3. Apply the migrations to a fresh database
+4. Build the pinned sandbox image and run the real-Docker E2E suite
+   (`EXTENSIONLAB_E2E_DOCKER=1`, so an unavailable Docker fails the job), then
+   verify that no sandbox containers were left behind
+5. Build the `web` and `worker` application images
 
 ## Roadmap
 
@@ -229,11 +295,23 @@ it will:
   Chromium container with runtime events, console/network capture, and cleanup.
 - **Phase 4 (implemented):** Deterministic automated test engine, scores,
   diagnostics, and live SSE progress inside the sandbox.
-- **Phase 5 (current):** Accounts, persistent extension projects, analysis
+- **Phase 5 (implemented):** Accounts, persistent extension projects, analysis
   snapshots, test history, immutable reports, comparison, secure sharing,
   usage limits, settings, and account deletion.
-- **Later phases (planned):** Team collaboration, cloud managed history, and
-  AI-assisted analysis.
+- **Phase 6 (implemented):** Production infrastructure — durable package storage,
+  persistent job queue and worker, real Docker execution, configuration
+  validation, e-mail delivery, structured logging, health/readiness, artifact
+  retention, hardened images and a real-Docker E2E suite.
+- **Phase 7 (implemented):** Plans, billing and entitlements — Free/Pro/Business
+  catalog, provider-agnostic checkout and subscriptions, signed webhooks,
+  server-side entitlement service, billing-period usage limits, portal,
+  invoices, paywall UX and account-deletion cancellation.
+- **Phase 8 (current):** AI assistance — provider abstraction with one
+  OpenAI-compatible adapter and a deterministic fake, redacted and
+  allowlisted evidence contexts, strict output validation with evidence
+  links, validated test suggestions, plan-gated quotas and an on-demand UI
+  that keeps AI interpretation visibly separate from verified results.
+- **Later phases (planned):** Team collaboration and cloud managed history.
 
 ## Phase 4: Automated Testing & Runtime Diagnostics
 
@@ -518,15 +596,196 @@ Account → Upload Extension → Static Analysis → Save Project → Run Tests
 - Share tokens are cryptographically random, revocable, and optionally
   expiring.
 
-### Known limitations
+### Known limitations (as of Phase 5; addressed in Phase 6)
 
-- Email delivery is not wired to an external provider in this phase; in local
-  development, `EXTENSIONLAB_RESET_DEV_DIR` can be used to receive reset tokens
-  without exposing them in logs. Production should be configured with an email
-  provider.
-- Extension ZIP files are not stored permanently. Re-running automated tests
-  requires the owner to re-upload the original package.
-- Real container/Chromium E2E still requires Docker-capable infrastructure.
+- Email delivery, permanent package storage and a Docker-backed E2E suite
+  were out of scope for Phase 5. Phase 6 adds all three — see below.
+
+## Phase 6: Production Infrastructure & Commercial Readiness
+
+Phase 6 makes the platform deployable without rewriting the analyzer, sandbox,
+test engine or workspace.
+
+```text
+Upload → Validate → Store package → Queue job → Worker → Docker sandbox
+→ Chromium → Test engine → Results + artifacts → Persist → Report
+```
+
+### What changed
+
+- **Storage abstraction** (`lib/storage/`): `put/get/delete/exists/stat/
+  createReadStream/list` behind non-guessable keys
+  (`extensions/<user>/<random>.zip`, `artifacts/<run>/<random>.png`). The
+  local provider is the default; paths never reach clients. Uploads are
+  validated (Phase 1/2 limits), written, read back and hash-verified before
+  the `extension_packages` row is committed; failures clean the blob up.
+- **Background jobs** (`lib/jobs/`): persistent `jobs` table with
+  `queued → running → completed | failed | cancelled | expired` and
+  `failed → retrying → running` for transient errors (exponential backoff
+  1s, 2s, 4s, 8s … capped at 60s). Atomic claiming with leases, orphan
+  recovery on startup and during sweeps, idempotency keys, cooperative
+  cancellation, per-user and global concurrency, queue back-pressure and a
+  graceful `SIGTERM`/`SIGINT` shutdown. Run it with `npm run worker`
+  (`WORKER_MODE=external`) or embedded in the web process for development.
+- **Real Docker execution**: the worker drives the Phase 3 `SandboxManager`
+  and Docker driver unchanged (non-root, `--cap-drop ALL`,
+  `no-new-privileges`, read-only rootfs, `noexec` tmpfs, memory/CPU/PID
+  limits, loopback-only control port, no host network/mounts/socket).
+  A pre-flight probe distinguishes "Docker missing", "daemon unreachable"
+  and "image missing"; a run whose sandbox never started ends as
+  `INFRASTRUCTURE_ERROR` with no fabricated score and no quota consumed.
+- **Validated configuration** (`lib/config/env.ts`): every variable in
+  `.env.example` is parsed once; production refuses to start without
+  mandatory secrets or with unsafe settings.
+- **E-mail** (`lib/email/`): `console | file | http | noop` providers behind
+  one interface; password resets enqueue an `EMAIL` job inside the same
+  transaction as the hashed token. Raw tokens are never logged and job
+  payloads are redacted once delivered.
+- **Observability**: JSON logs with `ts, level, event, requestId, jobId,
+  userId, durationMs, result, errorCode` and automatic redaction of secrets;
+  `X-Request-ID` correlation; a stable error catalog; `GET /api/health`
+  (liveness) and `GET /api/ready` (database, storage, worker, sandbox and
+  capability flags).
+- **Artifacts & retention**: screenshots, runtime logs and network summaries
+  are stored privately with SHA-256 and expiry; `/api/artifacts/:id` is
+  owner-only. A scheduled `ARTIFACT_CLEANUP` job enforces
+  `*_RETENTION_DAYS` for packages, artifacts, reset tokens, sessions, shares,
+  finished jobs and stale runs.
+- **Security**: nonce-based CSP without `unsafe-eval` in production,
+  configurable per-action rate limits (`RATE_LIMIT_*_PER_MIN`), no exec/shell
+  routes, no Docker details in responses, transactional account deletion.
+- **Deployment**: root `Dockerfile` (`web` and `worker` targets, non-root,
+  production dependencies only), `docker-compose.prod.yml`,
+  `.github/workflows/ci.yml` (typecheck, lint, tests, build, migrations,
+  image builds and the real-Docker E2E job).
+
+### New commands
+
+| Command | Purpose |
+| --- | --- |
+| `npm run worker` | Start a background worker (needs Docker for automated tests) |
+| `npm run db:migrate` / `npm run db:migrate:status` | Apply / inspect migrations |
+| `npm run cleanup` | Run retention cleanup on demand |
+| `npm run test:e2e` | Real-Docker end-to-end suite |
+| `npm run sandbox:build` | Build the pinned sandbox image |
+
+### Documentation
+
+- `docs/DEPLOYMENT.md` — environment variables, migrations, images, compose,
+  health checks, backups, PostgreSQL notes.
+- `docs/ARCHITECTURE.md` — request/job/sandbox flows and data model.
+- `docs/SECURITY.md` — trust boundaries, container hardening, CSP, logging.
+- `docs/OPERATIONS.md` — runbooks: worker, cleanup, E2E, troubleshooting.
+
+## Phase 7: Plans, Billing & Entitlements
+
+Phase 7 adds the commercial layer without changing how analysis, sandboxes or
+tests work.
+
+```text
+Free → pricing page → hosted checkout → provider subscription → signed webhook
+→ subscriptions table → entitlement service → product APIs (429 / 402 / 413)
+```
+
+### What changed
+
+- **Plans** (`lib/billing/plans.ts`): exactly Free, Pro and Business.
+  Limits are configuration-driven (`PLAN_<PLAN>_*`), prices are display
+  values from `BILLING_*_AMOUNT` / `BILLING_CURRENCY`, the charge is defined by
+  the provider price (`BILLING_<PLAN>_PRICE_ID`). Nothing is hardcoded as a
+  final price. Details: `docs/PLANS.md`.
+- **Entitlement service** (`lib/billing/entitlements.ts`): `canAnalyze`,
+  `canRunTests`, `canUploadPackage`, `canCreateShare`,
+  `canUseAdvancedDiagnostics`, `getMaxConcurrentRuns`, `hasPriorityExecution`,
+  `getRetentionForUser`, `getQuotaUsage`. Every product route goes through it;
+  the frontend never decides. Quota errors return
+  `429 QUOTA_EXCEEDED {currentUsage, limit, resetAt, requiredPlan}`; plan
+  gates return `402 PAYMENT_REQUIRED`; size gates `413`.
+- **Provider abstraction** (`lib/billing/provider.ts`, `providers/`): a
+  Stripe REST adapter (no SDK) and an in-memory fake for development/tests
+  behind one `BillingProvider` interface; `BILLING_PROVIDER=disabled` keeps
+  everyone on Free. The fake is rejected in production; production requires
+  live keys and validates all billing configuration at startup.
+- **Subscriptions** (`lib/db/migrations/003_phase7_billing.sql`):
+  `billing_customers`, `subscriptions`, `billing_events` (unique provider
+  event id → idempotent webhooks) and `checkout_sessions`. No card data, no
+  raw payloads. Existing `usage_events` / `quota_reservations` are reused;
+  paid users are measured inside their billing period, Free users per
+  calendar month.
+- **Flow**: `POST /api/billing/checkout {planId}` (server maps plan → price)
+  → provider → `/dashboard/billing/return` polls `POST /api/billing/confirm`
+  ("payment is being confirmed") → activation comes from provider
+  subscription objects via `POST /api/billing/webhook` (signature over the
+  raw body, 400 on missing/invalid/tampered/stale, 200 on duplicates, 5xx on
+  transient failures so the provider retries). Cancel at period end,
+  reactivate, hosted portal and provider invoice links are exposed under
+  `/api/billing/*` (session + same-origin + rate limits).
+- **Grace and downgrade**: failed renewals keep paid features for
+  `BILLING_PAST_DUE_GRACE_DAYS`; cancellation, expiry or past-due after grace
+  fall back to Free without deleting anything. Account deletion cancels the
+  provider subscription first and refuses to proceed if that fails.
+- **UI**: public `/pricing`, `/dashboard/billing` (plan, usage bars, billing
+  cycle, payment status, plans, actions, invoices), Billing nav item, subtle
+  plan badges, `PaywallNotice` with *View plans* wherever a limit is hit, and
+  reference ids on billing errors. No payment data ever reaches client
+  storage or URLs.
+
+### Documentation
+
+- `docs/BILLING.md` — architecture, data model, configuration, lifecycle,
+  webhooks, local testing with the fake provider, production setup, tax /
+  refunds, troubleshooting.
+- `docs/PLANS.md` — plan catalog, entitlement API and HTTP contract.
+- `docs/SECURITY.md`, `docs/DEPLOYMENT.md`, `docs/OPERATIONS.md`,
+  `docs/ARCHITECTURE.md` — updated for Phase 7.
+
+## Phase 8: AI Assistance
+
+Phase 8 layers an assistant over the existing platform without changing how
+analysis, sandboxes, tests, ownership or billing work.
+
+- **Deterministic first.** Everything ExtensionLab *verifies* — scores,
+  findings, permissions, test outcomes, diagnostics — is still produced by the
+  analyzer, the sandbox and the test engine and carries a "Verified by
+  ExtensionLab" badge. AI panels are additional, labelled "AI interpretation"
+  or "AI-assisted", show a confidence level (high / medium / low) and the
+  disclaimer *"AI-generated guidance is based on the available ExtensionLab
+  evidence. Verify recommendations before applying changes."*
+- **Features** (all on demand, never on page load): *Explain with AI* on
+  findings and diagnostics, *Analyze failure* on failed tests, *Analyze
+  runtime errors* on a run, *Generate AI summary*, *Suggest tests* and *Ask
+  about this report* on the report page. Every answer links to real finding /
+  test / file / event / report-section ids; references the model invents are
+  discarded.
+- **Safety.** Contexts contain only allowlisted, size-bounded, redacted
+  evidence (no package contents, raw manifests, account or billing data).
+  Untrusted extension/report text is confined to a delimited data block under
+  fixed system rules; output must be a single JSON object matching a strict
+  schema and is redacted again. Test suggestions are validated against the
+  Phase 4 action/assertion/selector/URL allowlists and can only be run through
+  the normal test API. The model has no tools and no execution path.
+- **Access and limits.** `POST /api/ai/{finding,test-failure,runtime-error,
+  report-summary,suggest-tests,report-question}` require a session, pass the
+  same-origin check, load resources through the owner-scoped repositories,
+  and never accept share tokens. Plans gate the feature (`canUseAI`: Free not
+  included, Pro 100, Business 500 requests per period, configurable), quota is
+  charged only for validated answers, and per-user rate limits, concurrency
+  caps and body/context/output size limits bound cost and abuse.
+- **Providers.** `AI_PROVIDER=openai` with `AI_API_KEY` (any OpenAI-compatible
+  `AI_BASE_URL`), `fake` for development/tests (deterministic, offline,
+  scripted failures), or `disabled` (production default) — the app runs
+  unchanged and shows "AI assistance is currently unavailable.". Production
+  rejects the fake provider and never falls back to it.
+- **Data.** Validated results are stored per user for
+  `AI_RESULT_RETENTION_DAYS` (reused as "Previously generated" for identical
+  evidence, removed by cleanup and account deletion); prompts and raw
+  responses are not stored; logs and metrics carry aggregate metadata only.
+
+Documentation: `docs/AI.md` (architecture, provider abstraction,
+configuration, features, context building, redaction, quotas, rate limits,
+injection defense, fake provider, testing, production setup, privacy, failure
+behaviour); `docs/SECURITY.md`, `docs/DEPLOYMENT.md`, `docs/PLANS.md`,
+`docs/OPERATIONS.md` and `docs/ARCHITECTURE.md` are updated for Phase 8.
 
 ## License
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { KeyRound, LogOut, ShieldCheck, Trash2, UserRound, Database } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -9,8 +10,8 @@ import { Badge } from "@/components/ui/Badge";
 
 interface MeResponse {
   user: { id: string; email: string; name: string; createdAt: number };
-  plan: { name: string; analysisLimit: number; testRunLimit: number };
-  usage: { analysisUsed: number; testRunUsed: number };
+  plan: { name: string; analysisLimit: number; testRunLimit: number; billingState?: string };
+  usage: { analysisUsed: number; testRunUsed: number; resetAt?: number };
   activeSessions: Array<{ id: string; createdAt: number; lastActiveAt: number; userAgent: string | null; ipAddress: string | null }>;
 }
 
@@ -203,14 +204,25 @@ export function AccountSettings() {
       </Card>
 
       <Card>
-        <div className="flex items-center gap-2">
-          <Database className="h-5 w-5 text-[var(--text-secondary)]" aria-hidden="true" />
-          <h2 className="text-base font-semibold tracking-tight">Usage</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Database className="h-5 w-5 text-[var(--text-secondary)]" aria-hidden="true" />
+            <h2 className="text-base font-semibold tracking-tight">Usage</h2>
+            <Badge tone="neutral">{me.plan.name} plan</Badge>
+          </div>
+          <Link href="/dashboard/billing" className="text-sm font-medium text-[var(--accent)]">
+            Manage plan
+          </Link>
         </div>
         <div className="mt-4 grid grid-cols-2 gap-4">
           <UsageStat label="Analyses" used={me.usage.analysisUsed} limit={me.plan.analysisLimit} />
           <UsageStat label="Test runs" used={me.usage.testRunUsed} limit={me.plan.testRunLimit} />
         </div>
+        {me.usage.resetAt ? (
+          <p className="mt-3 text-xs text-[var(--text-secondary)]">
+            Limits reset on {new Date(me.usage.resetAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}.
+          </p>
+        ) : null}
       </Card>
 
       <Card>

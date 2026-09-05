@@ -11,6 +11,7 @@ import { countExtensions } from "@/lib/db/repositories/extensions";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { runHasExecutedTests, runOutcomeLabel, runScoreLabel } from "@/lib/testing/status-labels";
 
 export const metadata: Metadata = { title: "Overview" };
 export const dynamic = "force-dynamic";
@@ -30,9 +31,7 @@ export default async function DashboardOverviewPage() {
     countReports(userId),
   ];
 
-  const completed = testData.items.filter(
-    (run) => run.status === "completed" || run.status === "failed" || run.status === "timeout",
-  );
+  const completed = testData.items.filter((run) => runHasExecutedTests(run));
   const averageScore =
     completed.length > 0
       ? Math.round(completed.reduce((sum, run) => sum + run.score, 0) / completed.length)
@@ -95,7 +94,7 @@ export default async function DashboardOverviewPage() {
             title: item.name,
             sub: `${item.manifest_version?.toUpperCase() ?? "Unknown"} · Health ${item.health_score}`,
             href: `/dashboard/extensions/${item.id}`,
-            badge: item.last_test_status ? testBadge(item.last_test_status) : null,
+            badge: item.last_test_status ? runOutcomeLabel({ status: item.last_test_status }) : null,
           }))}
         />
         <RecentSection
@@ -105,9 +104,9 @@ export default async function DashboardOverviewPage() {
           items={testData.items.map((item) => ({
             id: item.id,
             title: item.extensionName ?? "Extension",
-            sub: `${item.score}/100 · ${item.status}`,
+            sub: `${runScoreLabel(item)} · ${runOutcomeLabel(item)}`,
             href: `/dashboard/tests/${item.id}`,
-            badge: item.status ? testBadge(item.status) : null,
+            badge: item.status ? runOutcomeLabel(item) : null,
           }))}
         />
         <RecentSection
@@ -181,20 +180,13 @@ function RecentSection({
   );
 }
 
-function testBadge(status: string): string {
-  if (status === "completed") return "Passed";
-  if (status === "failed") return "Failed";
-  if (status === "timeout") return "Timeout";
-  if (status === "destroyed") return "Cancelled";
-  if (["idle", "preparing", "starting", "running", "stopping"].includes(status)) return "Running";
-  return status;
-}
 
 function badgeTone(
   status: string,
 ): "success" | "error" | "warning" | "info" | "neutral" {
   if (status === "Passed") return "success";
   if (status === "Failed" || status === "Timeout") return "error";
-  if (status === "Running") return "info";
+  if (status === "Warnings" || status === "Infrastructure error") return "warning";
+  if (status === "Running" || status === "Queued") return "info";
   return "neutral";
 }

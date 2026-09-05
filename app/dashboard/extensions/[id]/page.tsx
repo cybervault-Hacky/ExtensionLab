@@ -7,6 +7,7 @@ import { restoreUser, SESSION_COOKIE } from "@/lib/auth/session";
 import { getOwnedExtension } from "@/lib/db/repositories/extensions";
 import { getLatestSnapshot, listSnapshots } from "@/lib/db/repositories/snapshots";
 import { listTestRunsForExtension } from "@/lib/db/repositories/test-runs";
+import { runOutcomeLabel, runOutcomeTone, runScoreLabel } from "@/lib/testing/status-labels";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -106,10 +107,10 @@ export default async function ExtensionDetailPage({
             {runs.map((run) => (
               <Link key={run.id} href={`/dashboard/tests/${run.id}`} className="flex items-center justify-between gap-3 py-3 hover:bg-[var(--surface-secondary)]">
                 <div>
-                  <p className="text-sm font-medium">{run.score}/100</p>
+                  <p className="text-sm font-medium">{runScoreLabel(run)}</p>
                   <p className="text-xs text-[var(--text-secondary)]">{relativeTime(run.created_at)}</p>
                 </div>
-                <Badge tone={testTone(run.status)}>{run.status}</Badge>
+                <Badge tone={runOutcomeTone(run)}>{runOutcomeLabel(run)}</Badge>
               </Link>
             ))}
           </div>

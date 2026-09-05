@@ -3,9 +3,10 @@
 import { Logo } from "./Logo";
 
 const productLinks = [
-  { label: "Product", href: "#product" },
-  { label: "Features", href: "#features" },
-  { label: "Documentation", href: "#documentation" },
+  { label: "Product", href: "/#product" },
+  { label: "Features", href: "/#features" },
+  { label: "Pricing", href: "/pricing" },
+  { label: "Documentation", href: "/#documentation" },
 ];
 
 const legalLinks = [

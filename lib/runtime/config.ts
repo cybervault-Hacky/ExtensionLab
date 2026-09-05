@@ -52,12 +52,18 @@ export function getSandboxConfig(): SandboxConfig {
   const networkMode = process.env.SANDBOX_NETWORK_MODE?.toLowerCase();
   return {
     image: process.env.SANDBOX_IMAGE || "extensionlab-sandbox:local",
-    maxRuntimeMs: numberFromEnv(process.env.SANDBOX_MAX_RUNTIME, 120) * 1000,
+    // Phase 6 names (SANDBOX_TIMEOUT / SANDBOX_MAX_CONCURRENCY) take precedence;
+    // the Phase 3 names remain supported for existing deployments.
+    maxRuntimeMs:
+      numberFromEnv(
+        process.env.SANDBOX_TIMEOUT,
+        numberFromEnv(process.env.SANDBOX_MAX_RUNTIME, 120),
+      ) * 1000,
     defaultMemoryLimit: process.env.SANDBOX_MEMORY_LIMIT || "768m",
     defaultCpuLimit: process.env.SANDBOX_CPU_LIMIT || "0.5",
     maxConcurrentSandboxes: numberFromEnv(
-      process.env.SANDBOX_MAX_CONCURRENT,
-      2,
+      process.env.SANDBOX_MAX_CONCURRENCY,
+      numberFromEnv(process.env.SANDBOX_MAX_CONCURRENT, 2),
     ),
     maxSandboxesPerWindow: numberFromEnv(
       process.env.SANDBOX_MAX_PER_WINDOW,

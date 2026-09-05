@@ -1,0 +1,109 @@
+# Production deployment: web + worker + shared SQLite volume + sandbox image.
+#
+#   cp .env.example .env            # then fill in real values (never commit .env)
+#   docker compose -f docker-compose.prod.yml --profile run-once build sandbox-image
+#   docker compose -f docker-compose.prod.yml build
+#   docker compose -f docker-compose.prod.yml run --rm web node scripts/db-migrate.mjs
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Requirements & notes (see docs/DEPLOYMENT.md):
+# - The host must run Docker; the worker drives sandboxes through the Docker
+#   socket. The web service never gets the socket.
+# - SQLite lives on the shared `data` volume; run exactly one worker replica per
+#   volume and put a TLS-terminating reverse proxy in front of `web`.
+# - Set DOCKER_GID to the gid of /var/run/docker.sock on the host
+#   (`stat -c %g /var/run/docker.sock`).
+
+x-common-env: &common-env
+  APP_ENV: production
+  APP_URL: ${APP_URL:?set APP_URL (https://...)}
+  SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET (>= 32 random chars)}
+  DATABASE_URL: sqlite:/data/extensionlab.sqlite
+  STORAGE_PROVIDER: local
+  STORAGE_PATH: /data/storage
+  SANDBOX_IMAGE: ${SANDBOX_IMAGE:-extensionlab-sandbox:local}
+  SANDBOX_MAX_CONCURRENCY: ${SANDBOX_MAX_CONCURRENCY:-4}
+  SANDBOX_USER_CONCURRENCY: ${SANDBOX_USER_CONCURRENCY:-1}
+  SANDBOX_TIMEOUT: ${SANDBOX_TIMEOUT:-120}
+  SANDBOX_MEMORY_LIMIT: ${SANDBOX_MEMORY_LIMIT:-768m}
+  SANDBOX_CPU_LIMIT: ${SANDBOX_CPU_LIMIT:-0.5}
+  SANDBOX_NETWORK_MODE: ${SANDBOX_NETWORK_MODE:-restricted}
+  JOB_MAX_RETRIES: ${JOB_MAX_RETRIES:-3}
+  EMAIL_PROVIDER: ${EMAIL_PROVIDER:?set EMAIL_PROVIDER (http or noop)}
+  EMAIL_FROM: ${EMAIL_FROM:-ExtensionLab <no-reply@example.com>}
+  EMAIL_HTTP_URL: ${EMAIL_HTTP_URL:-}
+  EMAIL_HTTP_TOKEN: ${EMAIL_HTTP_TOKEN:-}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  PACKAGE_RETENTION_DAYS: ${PACKAGE_RETENTION_DAYS:-30}
+  ARTIFACT_RETENTION_DAYS: ${ARTIFACT_RETENTION_DAYS:-14}
+  JOB_RETENTION_DAYS: ${JOB_RETENTION_DAYS:-14}
+
+services:
+  sandbox-image:
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile
+    image: ${SANDBOX_IMAGE:-extensionlab-sandbox:local}
+    profiles: ["run-once"]
+    command: ["true"]
+
+  web:
+    build:
+      context: .
+      target: web
+    image: extensionlab-web:latest
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      WORKER_MODE: external
+      PORT: "3000"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    build:
+      context: .
+      target: worker
+      args:
+        DOCKER_GID: ${DOCKER_GID:-999}
+    image: extensionlab-worker:latest
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      WORKER_MODE: external
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      WORKER_ID: ${WORKER_ID:-worker-1}
+      # Sandbox source packages are staged here and copied into containers
+      # with `docker cp`; nothing is bind-mounted into sandboxes.
+      SANDBOX_TEMP_ROOT: /tmp/extensionlab-runtime
+    volumes:
+      - data:/data
+      # Required: the worker creates disposable sandbox containers through the
+      # host daemon. Treat this host as part of the trust boundary.
+      - /var/run/docker.sock:/var/run/docker.sock
+    tmpfs:
+      - /tmp/extensionlab-runtime:mode=0700,uid=10001,gid=10001
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 45s
+    depends_on:
+      web:
+        condition: service_healthy
+
+volumes:
+  data:

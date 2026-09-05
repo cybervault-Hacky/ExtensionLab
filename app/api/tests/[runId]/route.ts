@@ -4,6 +4,8 @@ import { ApiError, apiErrorResponse, requireApiUser } from "@/lib/auth/api";
 import { getOwnedTestRun } from "@/lib/db/repositories/test-runs";
 import { isSafeId } from "@/lib/auth/validation";
 import { exportTestResults } from "@/lib/testing/diagnostics";
+import { listOwnedRunArtifacts } from "@/lib/artifacts/service";
+import { buildRunInfo } from "@/lib/testing/run-service";
 import type { DiagnosticFinding, TestResult, TestScore } from "@/lib/testing/types";
 
 export const runtime = "nodejs";
@@ -31,10 +33,18 @@ export async function GET(
       ? (JSON.parse(run.diagnostics_json) as DiagnosticFinding[])
       : result?.diagnostics ?? [];
 
+    const info = buildRunInfo(run);
     return NextResponse.json({
       run: {
         runId: run.id,
         status: run.status,
+        stage: info.stage ?? null,
+        outcome: info.outcome ?? null,
+        errorCode: info.errorCode ?? null,
+        reason: run.reason ?? null,
+        jobId: info.jobId ?? null,
+        queuePosition: info.queuePosition ?? null,
+        packageId: run.package_id ?? null,
         score: run.score,
         total: run.total,
         passed: run.passed,
@@ -65,6 +75,7 @@ export async function GET(
           basis: "",
         } satisfies TestScore),
       diagnostics,
+      artifacts: listOwnedRunArtifacts(user.id, run.id),
       export: exportTestResults({
         runId: run.id,
         extensionName: run.extensionName ?? undefined,
@@ -92,6 +103,6 @@ export async function GET(
       }),
     });
   } catch (error) {
-    return apiErrorResponse(error);
+    return apiErrorResponse(error, request);
   }
 }

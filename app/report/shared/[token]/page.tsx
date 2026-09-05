@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { getSharedPublicReport } from "@/lib/db/repositories/shared-reports";
+import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
 import { Logo } from "@/components/layout/Logo";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -13,7 +15,13 @@ export default async function SharedReportPage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const report = getSharedPublicReport(token);
+  // Public, unauthenticated endpoint: throttle per client to slow token
+  // guessing and scraping. Tokens are 160-bit random so guessing is infeasible,
+  // but the limit also caps database load from abusive clients.
+  const headerList = await headers();
+  const clientIp = headerList.get("x-forwarded-for")?.split(",")[0]?.trim() || headerList.get("x-real-ip")?.trim() || "unknown";
+  const limit = enforceRateLimit("publicReport", clientIp);
+  const report = limit.ok ? getSharedPublicReport(token) : null;
 
   return (
     <main className="flex min-h-screen items-start justify-center px-4 py-12 sm:py-16">
@@ -21,9 +29,11 @@ export default async function SharedReportPage({
         <Logo />
         {!report ? (
           <Card className="mt-8 text-center">
-            <h1 className="text-2xl font-semibold tracking-tight">Report unavailable</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">{limit.ok ? "Report unavailable" : "Too many requests"}</h1>
             <p className="mt-2 text-sm text-[var(--text-secondary)]">
-              This shared link is unavailable. It may have been revoked or the expiration time has passed.
+              {limit.ok
+                ? "This shared link is unavailable. It may have been revoked or the expiration time has passed."
+                : "Please wait a moment and try again."}
             </p>
           </Card>
         ) : (
@@ -38,8 +48,8 @@ export default async function SharedReportPage({
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <Stat label="Health" value={String(report.staticScore ?? "—")} />
-              <Stat label="Runtime" value={String(report.runtimeScore ?? "—")} />
-              <Stat label="Tests" value={summaryText(report.tests)} />
+              <Stat label="Runtime" value={report.runtimeStatus === "not-executed" ? "Not executed" : String(report.runtimeScore ?? "—")} />
+              <Stat label="Tests" value={report.runtimeStatus === "not-executed" ? "Sandbox unavailable — no tests ran" : summaryText(report.tests)} />
             </div>
 
             <Card>

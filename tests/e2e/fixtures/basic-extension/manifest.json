@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "ExtensionLab E2E Basic Extension",
+  "version": "1.0.0",
+  "description": "Deterministic Manifest V3 fixture used by the real-Docker end-to-end suite.",
+  "permissions": ["storage"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "E2E Basic" },
+  "content_scripts": [
+    {
+      "matches": ["http://127.0.0.1/*", "http://localhost/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

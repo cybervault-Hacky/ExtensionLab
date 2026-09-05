@@ -10,9 +10,10 @@ import { SettingsPanel } from "@/components/settings/SettingsPanel";
 import { cn } from "@/lib/utils";
 
 const navLinks = [
-  { label: "Product", href: "#product" },
-  { label: "Features", href: "#features" },
-  { label: "Documentation", href: "#documentation" },
+  { label: "Product", href: "/#product" },
+  { label: "Features", href: "/#features" },
+  { label: "Pricing", href: "/pricing" },
+  { label: "Documentation", href: "/#documentation" },
 ];
 
 export function Navbar() {
@@ -77,7 +78,7 @@ export function Navbar() {
               <span className="sr-only">Appearance preferences</span>
             </Button>
             <Button
-              href="#upload"
+              href="/#upload"
               variant="accent"
               size="sm"
               className="min-h-[42px]"
@@ -135,7 +136,7 @@ export function Navbar() {
                 ))}
                 <div className="pt-2">
                   <Button
-                    href="#upload"
+                    href="/#upload"
                     variant="accent"
                     className="w-full"
                     onClick={() => setMenuOpen(false)}

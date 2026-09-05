@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 import { ApiError, apiErrorResponse, requireApiUser, requireSameOrigin } from "@/lib/auth/api";
 import { deleteExtension, getOwnedExtension } from "@/lib/db/repositories/extensions";
 import { getLatestSnapshot, listSnapshots } from "@/lib/db/repositories/snapshots";
-import { listTestRunsForExtension } from "@/lib/db/repositories/test-runs";
+import { listTestRunsForExtension, toTestRunListItem } from "@/lib/db/repositories/test-runs";
 import { isSafeId } from "@/lib/auth/validation";
 
 export const runtime = "nodejs";
@@ -23,7 +23,7 @@ export async function GET(
       extension,
       latestSnapshot: getLatestSnapshot(id),
       snapshots: listSnapshots(id, 20),
-      recentRuns: listTestRunsForExtension(id, 10),
+      recentRuns: listTestRunsForExtension(id, 10).map(toTestRunListItem),
     });
   } catch (error) {
     return apiErrorResponse(error);

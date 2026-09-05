@@ -52,6 +52,7 @@ export interface AnalysisSnapshotRow {
   manifest_version: string | null;
   analysis_json: string;
   created_at: number;
+  package_id?: string | null;
 }
 
 export interface TestRunRow {
@@ -74,6 +75,14 @@ export interface TestRunRow {
   events_json: string | null;
   created_at: number;
   updated_at: number;
+  /** Phase 6 additions (nullable for rows created before migration 002). */
+  package_id?: string | null;
+  job_id?: string | null;
+  stage?: string | null;
+  outcome?: string | null;
+  error_code?: string | null;
+  reason?: string | null;
+  access_token_hash?: string | null;
 }
 
 export interface ReportRow {
@@ -114,4 +123,163 @@ export interface UsageEventRow {
   user_id: string;
   kind: string;
   created_at: number;
+}
+
+/** Phase 6 rows. */
+export interface ExtensionPackageRow {
+  id: string;
+  user_id: string;
+  extension_id: string | null;
+  storage_key: string;
+  sha256: string;
+  size: number;
+  version: string | null;
+  original_name: string | null;
+  status: string;
+  created_at: number;
+  updated_at: number;
+  last_used_at: number | null;
+}
+
+export interface JobRow {
+  id: string;
+  type: string;
+  user_id: string | null;
+  status: string;
+  priority: number;
+  attempts: number;
+  max_attempts: number;
+  payload_json: string;
+  result_json: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  idempotency_key: string | null;
+  resource_type: string | null;
+  resource_id: string | null;
+  worker_id: string | null;
+  lease_expires_at: number | null;
+  run_after: number;
+  cancel_requested_at: number | null;
+  created_at: number;
+  updated_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+}
+
+export interface JobEventRow {
+  id: number;
+  job_id: string;
+  kind: string;
+  stage: string | null;
+  payload: string;
+  created_at: number;
+}
+
+export interface WorkerRow {
+  id: string;
+  started_at: number;
+  last_seen_at: number;
+  concurrency: number;
+  active_jobs: number;
+  sandbox_available: number | null;
+  sandbox_detail: string | null;
+  stopping: number;
+}
+
+export interface QuotaReservationRow {
+  id: string;
+  user_id: string;
+  kind: string;
+  resource_id: string | null;
+  job_id: string | null;
+  created_at: number;
+  consumed_at: number | null;
+  released_at: number | null;
+}
+
+export interface ArtifactRow {
+  id: string;
+  test_run_id: string;
+  user_id: string;
+  type: string;
+  storage_key: string;
+  size: number;
+  sha256: string;
+  content_type: string;
+  label: string | null;
+  created_at: number;
+  expires_at: number;
+}
+
+/** Phase 7 rows. */
+export interface BillingCustomerRow {
+  user_id: string;
+  provider: string;
+  provider_customer_id: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SubscriptionRow {
+  id: string;
+  user_id: string;
+  provider: string;
+  provider_customer_id: string;
+  provider_subscription_id: string;
+  provider_price_id: string | null;
+  plan_id: string;
+  status: string;
+  current_period_start: number | null;
+  current_period_end: number | null;
+  cancel_at_period_end: number;
+  cancel_at: number | null;
+  canceled_at: number | null;
+  trial_end: number | null;
+  ended_at: number | null;
+  last_event_at: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface BillingEventRow {
+  id: string;
+  provider: string;
+  provider_event_id: string;
+  event_type: string;
+  provider_event_type: string;
+  user_id: string | null;
+  subscription_id: string | null;
+  result: string;
+  created_at: number;
+  processed_at: number | null;
+}
+
+export interface CheckoutSessionRow {
+  id: string;
+  user_id: string;
+  provider: string;
+  provider_session_id: string;
+  plan_id: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Phase 8: validated AI result linked to the resource it explains. */
+export interface AIResultRow {
+  id: string;
+  user_id: string;
+  feature: string;
+  resource_kind: string;
+  resource_id: string;
+  target_id: string | null;
+  provider: string;
+  model: string;
+  context_hash: string;
+  result_json: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  duration_ms: number;
+  created_at: number;
+  expires_at: number;
 }
