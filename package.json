@@ -13,7 +13,12 @@
     "test:watch": "vitest",
     "typecheck:app": "tsc --noEmit",
     "typecheck:sandbox": "tsc --noEmit -p sandbox/tsconfig.json",
-    "db:migrate": "node scripts/db-migrate.mjs"
+    "db:migrate": "node scripts/db-migrate.mjs",
+    "worker": "node --no-warnings=ExperimentalWarning --experimental-transform-types --import ./scripts/worker-loader.mjs scripts/worker.ts",
+    "cleanup": "node --no-warnings=ExperimentalWarning --experimental-transform-types --import ./scripts/worker-loader.mjs scripts/cleanup.ts",
+    "db:migrate:status": "node scripts/db-migrate.mjs --status",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "sandbox:build": "docker build -f sandbox/Dockerfile -t extensionlab-sandbox:local ."
   },
   "dependencies": {
     "clsx": "^2.1.1",

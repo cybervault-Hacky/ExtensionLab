@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { deleteAccount } from "@/lib/account/deletion";
 import {
   ApiError,
   apiErrorResponse,
@@ -15,12 +16,10 @@ import {
   findUserById,
   updateUserPassword,
   updateUserProfile,
-  deleteUser,
 } from "@/lib/db/repositories/users";
 import { verifyPassword, hashPassword } from "@/lib/auth/password";
 import { normalizeEmail, isValidEmail, validateName, validatePassword } from "@/lib/auth/validation";
 import { recordAuditEvent } from "@/lib/db/repositories/audit";
-import { transaction, getDb } from "@/lib/db/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -103,9 +102,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse> {
     }
 
     recordAuditEvent({ userId: user.id, type: "account_delete", detail: "Account and owned data deleted." });
-    transaction(getDb(), () => {
-      deleteUser(user.id);
-    });
+    await deleteAccount(user.id);
 
     const response = NextResponse.json({ ok: true });
     clearSessionCookie(response);

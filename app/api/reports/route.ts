@@ -13,8 +13,21 @@ import { getOwnedTestRun } from "@/lib/db/repositories/test-runs";
 import { createReport, listReports } from "@/lib/db/repositories/reports";
 import type { ReportSort } from "@/lib/db/repositories/reports";
 import { parsePagination, parseSort, isSafeId } from "@/lib/auth/validation";
+import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
+import { rateLimited } from "@/lib/auth/api";
+import { getClientIp } from "@/lib/runtime/api-helpers";
 
 import type { ExtensionAnalysis } from "@/types/extension";
+import type { TestRunRow } from "@/lib/db/schema/types";
+
+function runOutcomeOf(run: TestRunRow): string {
+  if (run.outcome) return run.outcome;
+  // Phase 5 rows predate the outcome column: derive from the legacy status.
+  if (run.status === "completed") return run.failed + run.error_count > 0 ? "FAILED" : run.warnings > 0 ? "WARNING" : "PASSED";
+  if (run.status === "timeout") return "TIMEOUT";
+  if (run.status === "destroyed") return "CANCELLED";
+  return "INFRASTRUCTURE_ERROR";
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,6 +58,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     requireSameOrigin(request);
     const user = requireApiUser(request);
+    const limit = enforceRateLimit("reportCreate", `${user.id}:${getClientIp(request)}`);
+    if (!limit.ok) throw rateLimited(limit.retryAfterSeconds);
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body) throw badRequest("Invalid request body.");
 
@@ -67,20 +82,33 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     let testRun = testRunId ? getOwnedTestRun(user.id, testRunId) : null;
     if (testRunId && !testRun) throw new ApiError(404, "not_found", "Test run not found.");
 
+    if (testRun && !["completed", "failed", "timeout", "destroyed"].includes(testRun.status)) {
+      throw new ApiError(409, "conflict", "Wait for the test run to finish before generating a report.");
+    }
+
     const analysis = JSON.parse(snapshot.analysis_json) as ExtensionAnalysis;
     const testResult = testRun?.result_json ? (JSON.parse(testRun.result_json) as Record<string, unknown>) : null;
     const healthScore = extension.health_score;
-    const runtimeScore = testRun?.score ?? 0;
-    const overallScore =
-      testRun && snapshot ? Math.round((healthScore + runtimeScore) / 2) : healthScore;
+    // Runtime status is reported honestly: a run whose sandbox never executed
+    // any test (infrastructure error / cancellation) has no runtime score and
+    // must not drag the overall score to 0 or be presented as "0/100".
+    const runOutcome = testRun ? runOutcomeOf(testRun) : null;
+    const runtimeExecuted = testRun ? runOutcome !== "INFRASTRUCTURE_ERROR" && runOutcome !== "CANCELLED" : false;
+    const runtimeScore = testRun && runtimeExecuted ? testRun.score : null;
+    const overallScore = runtimeScore !== null ? Math.round((healthScore + runtimeScore) / 2) : healthScore;
 
     const title =
       typeof body.title === "string" && body.title.trim()
         ? body.title.trim().slice(0, 140)
         : `${extension.name} Report`;
-    const summary = `${extension.name} · health ${healthScore}/100${
-      testRun ? ` · runtime ${runtimeScore}/100` : ""
-    }`;
+    const runtimeSummary = !testRun
+      ? ""
+      : runtimeScore !== null
+        ? ` · runtime ${runtimeScore}/100`
+        : runOutcome === "CANCELLED"
+          ? " · runtime tests cancelled"
+          : " · runtime tests not executed (infrastructure error)";
+    const summary = `${extension.name} · health ${healthScore}/100${runtimeSummary}`;
 
     const reportJson = {
       schemaVersion: 1,
@@ -105,8 +133,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       runtimeTests: testRun
         ? {
             runId: testRun.id,
-            score: testRun.score,
+            score: runtimeScore,
             status: testRun.status,
+            outcome: runOutcome,
+            errorCode: testRun.error_code ?? null,
+            reason: testRun.reason ?? null,
+            runtimeStatus: runtimeExecuted ? "executed" : "not-executed",
             summary: {
               total: testRun.total,
               passed: testRun.passed,
@@ -132,7 +164,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       title,
       summary,
       healthScore,
-      runtimeScore: testRun ? runtimeScore : null,
+      runtimeScore,
       overallScore,
       reportJson: JSON.stringify(reportJson),
     });

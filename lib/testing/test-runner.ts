@@ -22,6 +22,7 @@ import type {
   TestResult,
   TestRunInfo,
   TestRunSnapshot,
+  TestRunStage,
   TestRunState,
   TestScore,
 } from "./types";
@@ -34,16 +35,37 @@ export interface TestRunCreateInput {
   tests: TestCase[];
   testUrl?: string;
   clientIp: string;
+  /**
+   * Phase 6: the background worker supplies the persisted run id and skips
+   * the per-IP window limit because admission control (quota, per-user and
+   * global concurrency, queue back-pressure) already happened when the job
+   * was accepted.
+   */
+  runId?: string;
+  token?: string;
+  trusted?: boolean;
 }
 
 export interface TestRunPersistenceHooks {
   onStatus?: (snap: TestRunSnapshot, info: TestRunInfo) => void;
   onFinished?: (snap: TestRunSnapshot, info: TestRunInfo) => void;
+  /** Phase 6: pipeline stage transitions. */
+  onStage?: (snap: TestRunSnapshot, stage: TestRunStage) => void;
+  /** Phase 6: every live event (already JSON-encoded) for durable streaming. */
+  onEvent?: (snap: TestRunSnapshot, event: string) => void;
+}
+
+export interface TestRunManagerOptions {
+  /** Overrides TEST_ENGINE_CONFIG.MAX_CONCURRENT_TEST_RUNS (worker concurrency). */
+  maxConcurrentRuns?: number;
 }
 
 interface ManagedRun {
   snap: TestRunSnapshot;
   listeners: EventEmitter;
+  finishedNotified: boolean;
+  unsubscribeSandbox?: () => void;
+  completion?: Promise<TestRunInfo>;
 }
 
 export class TestRunManager {
@@ -51,23 +73,29 @@ export class TestRunManager {
   private readonly ipCounts = new Map<string, { count: number; resetAt: number }>();
   private readonly sandboxManager: SandboxManager;
   private readonly persistence?: TestRunPersistenceHooks;
+  private readonly options: TestRunManagerOptions;
 
-  constructor(sandboxManager: SandboxManager, persistence?: TestRunPersistenceHooks) {
+  constructor(sandboxManager: SandboxManager, persistence?: TestRunPersistenceHooks, options: TestRunManagerOptions = {}) {
     this.sandboxManager = sandboxManager;
     this.persistence = persistence;
+    this.options = options;
   }
 
   async create(input: TestRunCreateInput): Promise<{ runId: string; token: string }> {
     const config = testConfig();
-    if (this.countActiveRuns() >= config.MAX_CONCURRENT_TEST_RUNS) {
+    const maxConcurrent = this.options.maxConcurrentRuns ?? config.MAX_CONCURRENT_TEST_RUNS;
+    if (this.countActiveRuns() >= maxConcurrent) {
       throw createRunError("capacity_reached", "Test run capacity reached. Queued runs will start when a slot becomes available.");
     }
-    if (this.isRateLimited(input.clientIp)) {
+    if (!input.trusted && this.isRateLimited(input.clientIp)) {
       throw createRunError("rate_limited", "Too many automated test runs were created recently. Please wait and try again.");
     }
 
-    const runId = `run_${randomBytes(8).toString("hex")}`;
-    const token = generateSessionToken();
+    const runId = input.runId ?? `run_${randomBytes(8).toString("hex")}`;
+    if (this.runs.has(runId)) {
+      throw createRunError("conflict", "This test run is already registered.");
+    }
+    const token = input.token ?? generateSessionToken();
     const snap: TestRunSnapshot = {
       runId,
       token,
@@ -82,12 +110,15 @@ export class TestRunManager {
       events: [],
       diagnostics: [],
       score: createEmptyScore(),
+      screenshots: [],
+      network: [],
+      runtimeEvents: [],
     };
     snap.events.push(JSON.stringify({ type: "test-run", state: "created", runId, timestamp: Date.now() }));
 
     const listener = new EventEmitter();
-    this.runs.set(runId, { snap, listeners: listener });
-    this.recordIp(input.clientIp);
+    this.runs.set(runId, { snap, listeners: listener, finishedNotified: false });
+    if (!input.trusted) this.recordIp(input.clientIp);
 
     return { runId, token };
   }
@@ -95,13 +126,44 @@ export class TestRunManager {
   async start(runId: string, token: string): Promise<TestRunInfo> {
     const run = this.getRun(runId, token);
     if (run.snap.state !== "idle") return this.toInfo(run);
+    void this.execute(runId, token).catch(() => undefined);
+    return this.toInfo(run);
+  }
+
+  /**
+   * Starts the run and resolves when it reaches a terminal state. Used by the
+   * background worker; `start()` remains for fire-and-forget callers.
+   */
+  execute(runId: string, token: string): Promise<TestRunInfo> {
+    const run = this.getRun(runId, token);
+    if (run.completion) return run.completion;
+    if (run.snap.state !== "idle") return Promise.resolve(this.toInfo(run));
 
     run.snap.state = "preparing";
+    this.setStage(run, "Preparing");
     this.emit(run, { type: "state", state: "preparing" });
     this.notifyStatus(run);
 
-    void this.executeRun(run).catch(() => undefined);
-    return this.toInfo(run);
+    run.completion = this.executeRun(run)
+      .catch(() => undefined)
+      .then(() => this.toInfo(run));
+    return run.completion;
+  }
+
+  /** Internal snapshot access for the worker (includes screenshot bytes). Never expose to clients. */
+  getSnapshot(runId: string, token: string): TestRunSnapshot {
+    return this.getRun(runId, token).snap;
+  }
+
+  /** Removes a finished run from memory. */
+  release(runId: string): void {
+    const run = this.runs.get(runId);
+    if (!run) return;
+    if (["completed", "failed", "timeout", "destroyed"].includes(run.snap.state)) {
+      run.unsubscribeSandbox?.();
+      run.listeners.removeAllListeners();
+      this.runs.delete(runId);
+    }
   }
 
   getStatus(runId: string, token: string): TestRunInfo {
@@ -130,20 +192,25 @@ export class TestRunManager {
 
   async stop(runId: string, token: string): Promise<TestRunInfo> {
     const run = this.getRun(runId, token);
-    if (run.snap.state === "completed" || run.snap.state === "destroyed") return this.toInfo(run);
+    if (["completed", "destroyed", "failed", "timeout", "stopping"].includes(run.snap.state)) return this.toInfo(run);
     run.snap.state = "stopping";
     this.emit(run, { type: "state", state: "stopping" });
     try {
       if (run.snap.sandboxId) {
-        await this.sandboxManager.stop(run.snap.sandboxId, run.snap.token);
+        await this.sandboxManager.stop(run.snap.sandboxId, run.snap.sandboxToken ?? run.snap.token);
       }
     } catch {
       // Best effort.
     }
-    await rm(run.snap.sourcePath, { recursive: true, force: true }).catch(() => undefined);
+    if (run.snap.sourcePath) {
+      await rm(run.snap.sourcePath, { recursive: true, force: true }).catch(() => undefined);
+    }
     run.snap.sourcePath = "";
     run.snap.state = "destroyed";
+    run.snap.errorCode = "JOB_CANCELLED";
+    run.snap.reason = "Test run cancelled.";
     run.snap.finishedAt = Date.now();
+    this.setStage(run, "Completed");
     this.emit(run, { type: "state", state: "destroyed", reason: "Test run cancelled." });
     this.notifyStatus(run);
     this.notifyFinished(run);
@@ -157,6 +224,7 @@ export class TestRunManager {
     }, testConfig().MAX_TEST_RUN_TIME);
     try {
       run.snap.state = "starting";
+      this.setStage(run, "Starting sandbox");
       this.emit(run, { type: "state", state: "starting" });
       this.notifyStatus(run);
 
@@ -167,12 +235,15 @@ export class TestRunManager {
         clientIp: "test-runner",
       });
       run.snap.sandboxId = created.sandboxId;
+      run.snap.sandboxToken = created.sessionToken;
+      this.observeSandbox(run, created.sandboxId);
 
-      run.snap.state = "starting";
-      this.emit(run, { type: "state", state: "starting" });
-      await this.sandboxManager.start(created.sandboxId, run.snap.token);
+      if (this.isCancelled(run)) throw createRunError("cancelled", "Test run cancelled.");
+      await this.sandboxManager.start(created.sandboxId, created.sessionToken);
+      if (this.isCancelled(run)) throw createRunError("cancelled", "Test run cancelled.");
       run.snap.state = "running";
       run.snap.startedAt = Date.now();
+      this.setStage(run, "Running tests");
       this.emit(run, { type: "state", state: "running" });
       this.notifyStatus(run);
 
@@ -184,33 +255,90 @@ export class TestRunManager {
         this.emit(run, { type: "test-result", result: publicResult(result) });
       }
 
+      if (this.isCancelled(run)) {
+        // stop() owns the terminal transition for cancelled runs.
+        return;
+      }
+
+      this.setStage(run, "Collecting evidence");
+      this.collectEvidence(run, created.sandboxId);
+
+      this.setStage(run, "Generating report");
       run.snap.score = computeTestScore(run.snap.results);
       run.snap.diagnostics = generateDiagnostics(run.snap.results);
       run.snap.state = timedOut ? "timeout" : "completed";
+      if (timedOut) run.snap.errorCode = "JOB_TIMEOUT";
       run.snap.finishedAt = Date.now();
       this.emit(run, { type: "state", state: run.snap.state });
       this.notifyStatus(run);
     } catch (error) {
+      if (this.isCancelled(run)) return;
       run.snap.state = "failed";
       run.snap.finishedAt = Date.now();
       run.snap.reason = sanitizeRunError(error);
-      this.emit(run, { type: "state", state: "failed", reason: run.snap.reason });
+      run.snap.errorCode = classifyRunError(error);
+      this.emit(run, { type: "state", state: "failed", reason: run.snap.reason, errorCode: run.snap.errorCode });
       this.notifyStatus(run);
     } finally {
       clearTimeout(runTimeout);
-      if (run.snap.sandboxId) {
-        await this.sandboxManager.stop(run.snap.sandboxId, run.snap.token).catch(() => undefined);
+      if (run.snap.sandboxId && !this.isCancelled(run)) {
+        await this.sandboxManager
+          .stop(run.snap.sandboxId, run.snap.sandboxToken ?? run.snap.token)
+          .catch(() => undefined);
       }
-      await rm(run.snap.sourcePath, { recursive: true, force: true }).catch(() => undefined);
+      if (run.snap.sourcePath) {
+        await rm(run.snap.sourcePath, { recursive: true, force: true }).catch(() => undefined);
+      }
       run.snap.sourcePath = "";
       if (run.snap.state === "completed" || run.snap.state === "timeout") {
-        run.snap.state = run.snap.state === "timeout" ? "timeout" : "completed";
         run.snap.reason = run.snap.reason ?? "Test run completed and sandbox destroyed.";
       }
       if (["completed", "failed", "timeout", "destroyed"].includes(run.snap.state)) {
+        this.setStage(run, "Completed");
         this.notifyStatus(run);
         this.notifyFinished(run);
       }
+    }
+  }
+
+  private isCancelled(run: ManagedRun): boolean {
+    return run.snap.state === "stopping" || run.snap.state === "destroyed";
+  }
+
+  /**
+   * Maps sandbox-manager events onto user-visible stages. Only real
+   * transitions reported by the sandbox produce a stage change.
+   */
+  private observeSandbox(run: ManagedRun, sandboxId: string): void {
+    const manager = this.sandboxManager as Partial<SandboxManager>;
+    if (typeof manager.subscribe !== "function") return;
+    run.unsubscribeSandbox = manager.subscribe.call(this.sandboxManager, sandboxId, (event: RuntimeEvent) => {
+      const status = event.metadata && typeof event.metadata === "object" ? (event.metadata as { status?: string }).status : undefined;
+      if (event.type === "sandbox" && status === "creating") this.setStage(run, "Starting sandbox");
+      if (event.type === "sandbox" && status === "loading_extension") this.setStage(run, "Starting Chromium");
+      if (event.type === "browser" && /loading unpacked extension/i.test(event.message)) this.setStage(run, "Loading extension");
+      if (event.type === "extension" && /extension loaded/i.test(event.message) && run.snap.stage === "Loading extension") {
+        // Stay on "Loading extension" until the runner reports running; the
+        // "Running tests" stage is set by executeRun once start() resolves.
+      }
+      if (event.type === "browser" && /starting isolated chromium/i.test(event.message)) this.setStage(run, "Starting Chromium");
+    });
+  }
+
+  /** Captures the final runtime evidence for artifacts (bounded). */
+  private collectEvidence(run: ManagedRun, sandboxId: string): void {
+    const token = run.snap.sandboxToken ?? run.snap.token;
+    try {
+      const events = this.sandboxManager.getEvents(sandboxId, token);
+      run.snap.runtimeEvents = this.toLikeEvents(events).slice(-testConfig().MAX_EVENTS);
+    } catch {
+      run.snap.runtimeEvents = run.snap.runtimeEvents ?? [];
+    }
+    try {
+      const network = this.sandboxManager.getNetwork(sandboxId, token);
+      run.snap.network = network.slice(-testConfig().MAX_NETWORK_EVENTS);
+    } catch {
+      run.snap.network = run.snap.network ?? [];
     }
   }
 
@@ -270,7 +398,7 @@ export class TestRunManager {
           break;
         }
         result.steps.push(`${action.type}${action.selector ? ` ${action.selector}` : ""}`);
-        const actionResponse = await this.sandboxManager.executeTestAction(sandboxId, run.snap.token, action);
+        const actionResponse = await this.sandboxManager.executeTestAction(sandboxId, this.sandboxTokenFor(run), action);
         if (!actionResponse.ok && action.type === "open_popup") {
           result.status = "skipped";
           result.skippedReason = "Popup testing is not supported by this browser environment.";
@@ -291,8 +419,8 @@ export class TestRunManager {
       }
 
       if (result.status === "running" || result.status === "pending") {
-        const events = this.toLikeEvents(this.sandboxManager.getEvents(sandboxId, run.snap.token));
-        const network = this.toLikeNetwork(this.sandboxManager.getNetwork(sandboxId, run.snap.token));
+        const events = this.toLikeEvents(this.sandboxManager.getEvents(sandboxId, this.sandboxTokenFor(run)));
+        const network = this.toLikeNetwork(this.sandboxManager.getNetwork(sandboxId, this.sandboxTokenFor(run)));
         const hasContentEvidence = events.some((event) =>
           event.type === "console" && /content script/i.test(event.source + event.message),
         );
@@ -352,13 +480,32 @@ export class TestRunManager {
     }
 
     if (result.status === "failed" || result.status === "error") {
-      const shot = await this.sandboxManager.screenshot(sandboxId, run.snap.token).catch(() => null);
+      const shot = await this.sandboxManager.screenshot(sandboxId, this.sandboxTokenFor(run)).catch(() => null);
       if (shot && shot.length > 0) {
         result.evidence.push({ id: `shot-${randomBytes(4).toString("hex")}`, timestamp: Date.now(), kind: "screenshot", label: "Screenshot captured at failure." });
+        const screenshots = run.snap.screenshots ?? (run.snap.screenshots = []);
+        if (screenshots.length < testConfig().MAX_SCREENSHOTS && shot.byteLength <= testConfig().MAX_ARTIFACT_SIZE) {
+          screenshots.push({ testId: test.id, capturedAt: Date.now(), bytes: shot });
+        }
       }
     }
 
     return result;
+  }
+
+  private sandboxTokenFor(run: ManagedRun): string {
+    return run.snap.sandboxToken ?? run.snap.token;
+  }
+
+  private setStage(run: ManagedRun, stage: TestRunStage): void {
+    if (run.snap.stage === stage) return;
+    run.snap.stage = stage;
+    this.emit(run, { type: "stage", stage, timestamp: Date.now() });
+    try {
+      this.persistence?.onStage?.(run.snap, stage);
+    } catch {
+      // Persistence failures must not break the run.
+    }
   }
 
   private toInfo(run: ManagedRun): TestRunInfo {
@@ -380,6 +527,8 @@ export class TestRunManager {
       error: summary.error,
       score: run.snap.score.total,
       reason: run.snap.reason,
+      stage: run.snap.stage,
+      errorCode: run.snap.errorCode,
     };
   }
 
@@ -393,7 +542,13 @@ export class TestRunManager {
   private emit(run: ManagedRun, payload: unknown): void {
     const event = JSON.stringify(payload);
     run.snap.events.push(event);
+    if (run.snap.events.length > testConfig().MAX_EVENTS) run.snap.events.splice(0, run.snap.events.length - testConfig().MAX_EVENTS);
     run.listeners.emit("event", event);
+    try {
+      this.persistence?.onEvent?.(run.snap, event);
+    } catch {
+      // Persistence failures must not break the run.
+    }
   }
 
   private toLikeEvents(events: RuntimeEvent[]): RuntimeEventLike[] {
@@ -409,6 +564,10 @@ export class TestRunManager {
   }
 
   private notifyFinished(run: ManagedRun): void {
+    if (run.finishedNotified) return;
+    run.finishedNotified = true;
+    run.unsubscribeSandbox?.();
+    run.unsubscribeSandbox = undefined;
     this.persistence?.onFinished?.(run.snap, this.toInfo(run));
   }
 
@@ -456,7 +615,30 @@ function createRunError(code: string, message: string): Error {
 
 function sanitizeRunError(error: unknown): string {
   const message = error instanceof Error ? error.message : "Unknown error.";
-  return message.replace(/\/(private|var|tmp)\/[^\s]+/g, "[path]").slice(0, 300);
+  return message
+    .replace(/\/(private|var|tmp|home|app|data)\/[^\s]+/g, "[path]")
+    .replace(/\b[0-9a-f]{12,}\b/g, "[id]")
+    .slice(0, 300);
+}
+
+/** Maps sandbox/runtime failures onto the stable error catalog. */
+function classifyRunError(error: unknown): string {
+  const code = error && typeof error === "object" ? (error as { code?: string }).code : undefined;
+  switch (code) {
+    case "environment_unavailable":
+    case "runner_unavailable":
+    case "capacity_reached":
+      return "SANDBOX_UNAVAILABLE";
+    case "extension_load_failed":
+    case "invalid_extension":
+      return "EXTENSION_LOAD_FAILED";
+    case "timeout":
+      return "SANDBOX_TIMEOUT";
+    case "cancelled":
+      return "JOB_CANCELLED";
+    default:
+      return "INTERNAL";
+  }
 }
 
 function createEmptyScore(): TestScore {

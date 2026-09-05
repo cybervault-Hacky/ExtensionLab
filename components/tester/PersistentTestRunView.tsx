@@ -15,12 +15,17 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { exportTestResults, copySummary } from "@/lib/testing/diagnostics";
+import { runHasExecutedTests, runOutcomeLabel } from "@/lib/testing/status-labels";
 import type { DiagnosticFinding, TestResult, TestScore } from "@/lib/testing/types";
 
 interface PersistedRun {
   run: {
     runId: string;
     status: string;
+    stage?: string | null;
+    outcome?: string | null;
+    errorCode?: string | null;
+    reason?: string | null;
     score: number;
     total: number;
     passed: number;
@@ -39,6 +44,7 @@ interface PersistedRun {
   results: TestResult[];
   score: TestScore;
   diagnostics: DiagnosticFinding[];
+  artifacts?: Array<{ id: string; type: string; size: number; createdAt: number; expiresAt: number | null }>;
   export: Record<string, unknown>;
 }
 
@@ -143,6 +149,10 @@ export function PersistentTestRunView({ runId }: { runId: string }) {
     );
   };
 
+  const executed = runHasExecutedTests({ status: data.run.status, outcome: data.run.outcome, failed: data.run.failed, error_count: data.run.error, timeout: data.run.timeout, warnings: data.run.warnings });
+  const outcomeLabel = runOutcomeLabel({ status: data.run.status, outcome: data.run.outcome, failed: data.run.failed, error_count: data.run.error, timeout: data.run.timeout, warnings: data.run.warnings });
+  const screenshots = (data.artifacts ?? []).filter((artifact) => artifact.type === "screenshot");
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -150,7 +160,9 @@ export function PersistentTestRunView({ runId }: { runId: string }) {
           <p className="eyebrow">Automated Test Report</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">{data.run.extensionName ?? "Automated Test Report"}</h1>
           <p className="mt-2 text-sm text-[var(--text-secondary)]">
-            Score {data.run.score}/100 · {data.run.passed} passed · {data.run.failed + data.run.error} failed · {data.run.warnings} warning · {data.run.skipped} skipped
+            {executed
+              ? `${outcomeLabel} · Score ${data.run.score}/100 · ${data.run.passed} passed · ${data.run.failed + data.run.error} failed · ${data.run.warnings} warning · ${data.run.skipped} skipped`
+              : `${outcomeLabel} · no automated tests were executed`}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -180,12 +192,38 @@ export function PersistentTestRunView({ runId }: { runId: string }) {
         </div>
       ) : null}
 
+      {!executed ? (
+        <div className="rounded-xl border border-[var(--status-warning)] bg-[var(--status-warning-soft)] p-4 text-sm" role="status">
+          <p className="font-semibold text-[var(--text-primary)]">
+            {data.run.outcome === "CANCELLED" ? "This run was cancelled" : "Infrastructure error — this run has no test results"}
+          </p>
+          <p className="mt-1 text-[var(--text-secondary)]">
+            {data.run.reason ?? "The isolated browser could not be started. Static analysis results are unaffected; retry the automated tests once the sandbox is available."}
+          </p>
+        </div>
+      ) : null}
+
       <div className="card card-pad grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Stat label="Passed" value={data.run.passed} tone="success" />
         <Stat label="Failed" value={data.run.failed + data.run.error + data.run.timeout} tone="error" />
         <Stat label="Warnings" value={data.run.warnings} tone="warning" />
-        <Stat label="Score" value={`${data.run.score}/100`} accent />
+        <Stat label="Score" value={executed ? `${data.run.score}/100` : "n/a"} accent />
       </div>
+
+      {screenshots.length > 0 ? (
+        <Card>
+          <h2 className="text-base font-semibold tracking-tight">Screenshots</h2>
+          <p className="mt-1 text-xs text-[var(--text-secondary)]">Captured inside the isolated browser. Private to your account.</p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {screenshots.map((artifact) => (
+              <a key={artifact.id} href={`/api/artifacts/${artifact.id}`} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-xl border border-[var(--border)]">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={`/api/artifacts/${artifact.id}`} alt="Sandbox screenshot" className="h-40 w-full object-cover" loading="lazy" />
+              </a>
+            ))}
+          </div>
+        </Card>
+      ) : null}
 
       <div className="card overflow-hidden">
         <div className="border-b border-[var(--border)] p-4">

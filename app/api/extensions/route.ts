@@ -9,7 +9,7 @@ import {
   usageLimit,
 } from "@/lib/auth/api";
 import { getClientIp } from "@/lib/runtime/api-helpers";
-import { checkRateLimit } from "@/lib/auth/rate-limit";
+import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
 import { getActivePlan } from "@/lib/db/plan";
 import { usageLimitReached, recordUsage } from "@/lib/db/repositories/usage";
 import {
@@ -74,7 +74,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const user = requireApiUser(request);
     const plan = getActivePlan();
     const ip = getClientIp(request);
-    const authLimit = checkRateLimit(`analysis:${user.id}:${ip}`, 30, 60 * 1000);
+    const authLimit = enforceRateLimit("upload", `${user.id}:${ip}`);
     if (!authLimit.ok) throw new ApiError(429, "rate_limited", "Too many analyses. Please wait and try again.");
 
     if (usageLimitReached(user.id, "analysis", plan.analysisLimit)) {

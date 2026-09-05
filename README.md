@@ -4,7 +4,13 @@
 
 ExtensionLab is a premium browser-extension inspection and testing platform.
 Phase 1 provides a polished web experience for uploading a browser extension
-ZIP package and inspecting it locally in the browser.
+ZIP package and inspecting it locally in the browser. Phase 6 (current) turns
+the project into a production-deployable service: durable package storage, a
+persistent background job queue and worker, real Docker execution, validated
+configuration, e-mail delivery, structured logging, health/readiness probes,
+artifact retention and hardened container images. See
+[Phase 6](#phase-6-production-infrastructure--commercial-readiness) and
+`docs/`.
 
 **Phase 1 does not execute extensions.** It performs:
 
@@ -65,9 +71,20 @@ production-build errors.
 
 ## Start production
 
+The build uses Next.js `output: "standalone"`, so production runs the
+generated server directly (not `next start`):
+
 ```bash
-npm run start
+npm run build
+npm run db:migrate
+HOSTNAME=0.0.0.0 PORT=3000 node .next/standalone/server.js   # web
+npm run worker                                              # background worker (separate process)
 ```
+
+Production requires `APP_ENV=production`, an `https://` `APP_URL`, a
+`SESSION_SECRET` of at least 32 characters and an explicit `EMAIL_PROVIDER`
+(`http` or `noop`); startup fails closed otherwise. `npm run start` remains
+available for local checks only. See `docs/DEPLOYMENT.md`.
 
 ## Lint
 
@@ -84,10 +101,24 @@ npm run typecheck
 ## Test
 
 ```bash
-npm run test
+npm run test        # unit + integration (no Docker required)
+npm run test:e2e    # real-Docker end-to-end suite (skips itself when Docker is unavailable)
 ```
 
-The test suite covers:
+The end-to-end suite (`tests/e2e/`) runs the full pipeline against a real
+sandbox container and skips with an explicit reason when Docker or the
+sandbox image is missing. Set `EXTENSIONLAB_E2E_DOCKER=1` (CI does) to make an
+unavailable Docker a hard failure instead of a skip. See `docs/OPERATIONS.md`.
+
+The unit/integration suite covers the Phase 1–5 behaviour below plus, for
+Phase 6: storage provider and package lifecycle, the job queue, worker,
+retries, cancellation, orphan recovery, quota reservations, the test-run
+pipeline with a fake sandbox, artifacts, e-mail delivery and password reset,
+configuration validation, CSP, rate-limit policy, error catalog/logging
+redaction, readiness, retention cleanup, account deletion and Docker
+hardening flags.
+
+Phase 1 coverage:
 
 - Valid manifest V3
 - Valid manifest V2 with informational compatibility warning
@@ -189,7 +220,11 @@ The app also runs pending migrations lazily on first database access, so
 `npm run dev` is sufficient for local work.
 
 The database file defaults to `data/extensionlab.sqlite` and can be overridden
-with `EXTENSIONLAB_DB_PATH` or `DATABASE_PATH`.
+with `DATABASE_URL=sqlite:/path/to/file.sqlite` (Phase 6) or the legacy
+`EXTENSIONLAB_DB_PATH` / `DATABASE_PATH` variables. `npm run db:migrate:status`
+lists pending migrations without applying them. Migration
+`002_phase6_infrastructure.sql` only adds tables and nullable columns; existing
+Phase 5 rows are never modified or deleted.
 
 ## Deployment
 
@@ -199,24 +234,33 @@ persistent database.
 
 ```bash
 npm run build
-npm run start
+npm run db:migrate
+node .next/standalone/server.js     # web (HOSTNAME/PORT from the environment)
+npm run worker                      # worker, on a Docker-capable host
 ```
 
-Deploy `npm run start` behind any Node-compatible host that provides a
-persistent writable filesystem, or point `EXTENSIONLAB_DB_PATH` at a managed
-volume. Reports, test runs, auth cookies, and account data require a real
-server.
+Deploy behind a TLS-terminating reverse proxy on a host that provides a
+persistent writable volume for the SQLite database and package/artifact
+storage. Automated tests additionally require a Docker-capable host for the
+worker. `docker-compose.prod.yml` and the root `Dockerfile` (`web` and
+`worker` targets) provide a reference deployment; `docs/DEPLOYMENT.md`
+documents every environment variable, migrations, backups, health checks and
+PostgreSQL notes.
 
 ## GitHub Actions
 
-The repository includes `.github/workflows/ci.yml`. On push and pull requests
-it will:
+The CI definition is `ci.yml` (shipped at `.github/workflows-pending/ci.yml`
+until a maintainer with workflow permissions moves it to
+`.github/workflows/ci.yml` — see the README in that directory). On push and
+pull requests it will:
 
-1. Install dependencies
-2. Run lint
-3. Run typecheck
-4. Run tests
-5. Run the production build
+1. Install dependencies from the lockfile
+2. Run typecheck, lint, the unit/integration tests and the production build
+3. Apply the migrations to a fresh database
+4. Build the pinned sandbox image and run the real-Docker E2E suite
+   (`EXTENSIONLAB_E2E_DOCKER=1`, so an unavailable Docker fails the job), then
+   verify that no sandbox containers were left behind
+5. Build the `web` and `worker` application images
 
 ## Roadmap
 
@@ -229,9 +273,13 @@ it will:
   Chromium container with runtime events, console/network capture, and cleanup.
 - **Phase 4 (implemented):** Deterministic automated test engine, scores,
   diagnostics, and live SSE progress inside the sandbox.
-- **Phase 5 (current):** Accounts, persistent extension projects, analysis
+- **Phase 5 (implemented):** Accounts, persistent extension projects, analysis
   snapshots, test history, immutable reports, comparison, secure sharing,
   usage limits, settings, and account deletion.
+- **Phase 6 (current):** Production infrastructure — durable package storage,
+  persistent job queue and worker, real Docker execution, configuration
+  validation, e-mail delivery, structured logging, health/readiness, artifact
+  retention, hardened images and a real-Docker E2E suite.
 - **Later phases (planned):** Team collaboration, cloud managed history, and
   AI-assisted analysis.
 
@@ -518,15 +566,86 @@ Account → Upload Extension → Static Analysis → Save Project → Run Tests
 - Share tokens are cryptographically random, revocable, and optionally
   expiring.
 
-### Known limitations
+### Known limitations (as of Phase 5; addressed in Phase 6)
 
-- Email delivery is not wired to an external provider in this phase; in local
-  development, `EXTENSIONLAB_RESET_DEV_DIR` can be used to receive reset tokens
-  without exposing them in logs. Production should be configured with an email
-  provider.
-- Extension ZIP files are not stored permanently. Re-running automated tests
-  requires the owner to re-upload the original package.
-- Real container/Chromium E2E still requires Docker-capable infrastructure.
+- Email delivery, permanent package storage and a Docker-backed E2E suite
+  were out of scope for Phase 5. Phase 6 adds all three — see below.
+
+## Phase 6: Production Infrastructure & Commercial Readiness
+
+Phase 6 makes the platform deployable without rewriting the analyzer, sandbox,
+test engine or workspace.
+
+```text
+Upload → Validate → Store package → Queue job → Worker → Docker sandbox
+→ Chromium → Test engine → Results + artifacts → Persist → Report
+```
+
+### What changed
+
+- **Storage abstraction** (`lib/storage/`): `put/get/delete/exists/stat/
+  createReadStream/list` behind non-guessable keys
+  (`extensions/<user>/<random>.zip`, `artifacts/<run>/<random>.png`). The
+  local provider is the default; paths never reach clients. Uploads are
+  validated (Phase 1/2 limits), written, read back and hash-verified before
+  the `extension_packages` row is committed; failures clean the blob up.
+- **Background jobs** (`lib/jobs/`): persistent `jobs` table with
+  `queued → running → completed | failed | cancelled | expired` and
+  `failed → retrying → running` for transient errors (exponential backoff
+  1s, 2s, 4s, 8s … capped at 60s). Atomic claiming with leases, orphan
+  recovery on startup and during sweeps, idempotency keys, cooperative
+  cancellation, per-user and global concurrency, queue back-pressure and a
+  graceful `SIGTERM`/`SIGINT` shutdown. Run it with `npm run worker`
+  (`WORKER_MODE=external`) or embedded in the web process for development.
+- **Real Docker execution**: the worker drives the Phase 3 `SandboxManager`
+  and Docker driver unchanged (non-root, `--cap-drop ALL`,
+  `no-new-privileges`, read-only rootfs, `noexec` tmpfs, memory/CPU/PID
+  limits, loopback-only control port, no host network/mounts/socket).
+  A pre-flight probe distinguishes "Docker missing", "daemon unreachable"
+  and "image missing"; a run whose sandbox never started ends as
+  `INFRASTRUCTURE_ERROR` with no fabricated score and no quota consumed.
+- **Validated configuration** (`lib/config/env.ts`): every variable in
+  `.env.example` is parsed once; production refuses to start without
+  mandatory secrets or with unsafe settings.
+- **E-mail** (`lib/email/`): `console | file | http | noop` providers behind
+  one interface; password resets enqueue an `EMAIL` job inside the same
+  transaction as the hashed token. Raw tokens are never logged and job
+  payloads are redacted once delivered.
+- **Observability**: JSON logs with `ts, level, event, requestId, jobId,
+  userId, durationMs, result, errorCode` and automatic redaction of secrets;
+  `X-Request-ID` correlation; a stable error catalog; `GET /api/health`
+  (liveness) and `GET /api/ready` (database, storage, worker, sandbox and
+  capability flags).
+- **Artifacts & retention**: screenshots, runtime logs and network summaries
+  are stored privately with SHA-256 and expiry; `/api/artifacts/:id` is
+  owner-only. A scheduled `ARTIFACT_CLEANUP` job enforces
+  `*_RETENTION_DAYS` for packages, artifacts, reset tokens, sessions, shares,
+  finished jobs and stale runs.
+- **Security**: nonce-based CSP without `unsafe-eval` in production,
+  configurable per-action rate limits (`RATE_LIMIT_*_PER_MIN`), no exec/shell
+  routes, no Docker details in responses, transactional account deletion.
+- **Deployment**: root `Dockerfile` (`web` and `worker` targets, non-root,
+  production dependencies only), `docker-compose.prod.yml`,
+  `.github/workflows/ci.yml` (typecheck, lint, tests, build, migrations,
+  image builds and the real-Docker E2E job).
+
+### New commands
+
+| Command | Purpose |
+| --- | --- |
+| `npm run worker` | Start a background worker (needs Docker for automated tests) |
+| `npm run db:migrate` / `npm run db:migrate:status` | Apply / inspect migrations |
+| `npm run cleanup` | Run retention cleanup on demand |
+| `npm run test:e2e` | Real-Docker end-to-end suite |
+| `npm run sandbox:build` | Build the pinned sandbox image |
+
+### Documentation
+
+- `docs/DEPLOYMENT.md` — environment variables, migrations, images, compose,
+  health checks, backups, PostgreSQL notes.
+- `docs/ARCHITECTURE.md` — request/job/sandbox flows and data model.
+- `docs/SECURITY.md` — trust boundaries, container hardening, CSP, logging.
+- `docs/OPERATIONS.md` — runbooks: worker, cleanup, E2E, troubleshooting.
 
 ## License
 

@@ -43,20 +43,10 @@ export function AutomatedTestLaunchCard({
       }
       const created = (await response.json()) as { runId: string; token: string; suite: { total: number } };
       window.sessionStorage.setItem(`extensionlab:test-token:${created.runId}`, created.token);
-
-      const startResponse = await fetch(`/api/tests/${created.runId}/start`, {
-        method: "POST",
-        headers: { "x-sandbox-token": created.token },
-      });
-      if (!startResponse.ok) {
-        const body = (await startResponse.json().catch(() => null)) as { error?: { message?: string } } | null;
-        window.sessionStorage.removeItem(`extensionlab:test-token:${created.runId}`);
-        setError(body?.error?.message ?? "The isolated browser could not be started.");
-        return;
-      }
+      // The run is queued durably; the worker executes it in the sandbox.
       router.push(`/dashboard/tests/${created.runId}`);
     } catch {
-      setError("We could not reach the isolated sandbox backend. Automated tests require a Docker-capable server.");
+      setError("We could not reach the ExtensionLab backend. Please try again.");
     } finally {
       setLaunching(false);
     }
@@ -103,7 +93,7 @@ export function AutomatedTestLaunchCard({
           {launching ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-              Preparing automated test suite
+              Queuing automated test run
             </>
           ) : (
             <>

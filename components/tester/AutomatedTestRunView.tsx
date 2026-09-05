@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/utils";
 import { exportTestResults, copySummary } from "@/lib/testing/diagnostics";
 import { summarizeResults } from "@/lib/testing/results";
+import { describeRunState, isActiveRunStatus } from "@/lib/testing/status-labels";
 import type {
   DiagnosticFinding,
   TestResult,
@@ -47,8 +48,22 @@ function statusColor(status: string): string {
   return "text-[var(--text-secondary)]";
 }
 
-export function AutomatedTestRunView({ runId }: { runId: string }) {
+const PIPELINE_STAGES = [
+  "Queued",
+  "Preparing",
+  "Starting sandbox",
+  "Starting Chromium",
+  "Loading extension",
+  "Running tests",
+  "Collecting evidence",
+  "Generating report",
+  "Completed",
+] as const;
+
+export function AutomatedTestRunView({ runId, onFinished }: { runId: string; onFinished?: () => void }) {
+  // Legacy Phase 4 token; access is now based on session ownership so it is optional.
   const [token, setToken] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
   const [info, setInfo] = useState<TestRunInfo | null>(null);
   const [results, setResults] = useState<TestResult[]>([]);
   const [diagnostics, setDiagnostics] = useState<DiagnosticFinding[]>([]);
@@ -59,82 +74,126 @@ export function AutomatedTestRunView({ runId }: { runId: string }) {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
-  const seenEvent = useRef(new Set<string>());
+  const lastEventId = useRef(0);
+  const finishedNotified = useRef(false);
 
   useEffect(() => {
-    const stored = window.sessionStorage.getItem(`extensionlab:test-token:${runId}`);
-    setToken(stored);
-    if (!stored) setFatal("Automated test run not found. Launch automated tests from the analysis report first.");
+    setToken(window.sessionStorage.getItem(`extensionlab:test-token:${runId}`));
+    setReady(true);
   }, [runId]);
 
+  const authHeaders = useMemo<Record<string, string>>(() => {
+    const headers: Record<string, string> = {};
+    if (token) headers["x-sandbox-token"] = token;
+    return headers;
+  }, [token]);
+
   const refresh = useCallback(async () => {
-    if (!token) return;
-    const headers = { "x-sandbox-token": token };
-    const statusResponse = await fetch(`/api/tests/${runId}/status`, { headers });
+    if (!ready) return;
+    const statusResponse = await fetch(`/api/tests/${runId}/status`, { headers: authHeaders, cache: "no-store" }).catch(() => null);
+    if (!statusResponse) return; // transient network failure: keep the last known state
     if (!statusResponse.ok) {
       const body = (await statusResponse.json().catch(() => null)) as { error?: { message?: string } } | null;
       setFatal(body?.error?.message ?? "Automated test run was not found.");
       return;
     }
-    setInfo((await statusResponse.json()) as TestRunInfo);
+    const next = (await statusResponse.json()) as TestRunInfo;
+    setInfo(next);
 
-    const resultsResponse = await fetch(`/api/tests/${runId}/results`, { headers });
-    if (resultsResponse.ok) {
+    const resultsResponse = await fetch(`/api/tests/${runId}/results`, { headers: authHeaders, cache: "no-store" }).catch(() => null);
+    if (resultsResponse?.ok) {
       const data = (await resultsResponse.json()) as { results: TestResult[]; score: TestScore; diagnostics: DiagnosticFinding[] };
       setResults(data.results);
       setScore(data.score);
       setDiagnostics(data.diagnostics);
     }
-  }, [runId, token]);
+  }, [runId, ready, authHeaders]);
+
+  const active = info ? isActiveRunStatus(info.state) : true;
 
   useEffect(() => {
-    if (!token) return;
+    if (!ready) return;
     void refresh();
-    const timer = setInterval(refresh, 900);
+    if (!active) return;
+    const timer = setInterval(() => void refresh(), 1500);
     return () => clearInterval(timer);
-  }, [token, refresh]);
+  }, [ready, active, refresh]);
 
+  // Durable SSE with automatic resume: the server replays events after the
+  // last id we saw, so reconnects never lose stage transitions.
   useEffect(() => {
-    if (!token) return;
-    let buffer = "";
+    if (!ready || !active) return;
     const controller = new AbortController();
-    const run = async () => {
-      const response = await fetch(`/api/tests/${runId}/events/stream`, {
-        headers: { "x-sandbox-token": token },
-        signal: controller.signal,
-      });
-      if (!response.ok) return;
-      const reader = response.body?.getReader();
-      if (!reader) return;
-      const decoder = new TextDecoder();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split("\n\n");
-        buffer = blocks.pop() ?? "";
-        for (const block of blocks) {
-          const line = block.split("\n").find((part) => part.startsWith("data:"));
-          if (!line) continue;
-          const payload = line.slice(5).trim();
-          if (!seenEvent.current.has(payload)) {
-            seenEvent.current.add(payload);
-            setEvents((current) => [...current, payload].slice(-200));
+    let stopped = false;
+    const connect = async () => {
+      while (!stopped) {
+        let buffer = "";
+        try {
+          const response = await fetch(`/api/tests/${runId}/events/stream?after=${lastEventId.current}`, {
+            headers: authHeaders,
+            signal: controller.signal,
+            cache: "no-store",
+          });
+          if (!response.ok || !response.body) return;
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const blocks = buffer.split("\n\n");
+            buffer = blocks.pop() ?? "";
+            for (const block of blocks) {
+              const lines = block.split("\n");
+              const idLine = lines.find((part) => part.startsWith("id:"));
+              const dataLine = lines.find((part) => part.startsWith("data:"));
+              if (!dataLine) continue;
+              if (idLine) {
+                const id = Number(idLine.slice(3).trim());
+                if (Number.isFinite(id) && id > lastEventId.current) lastEventId.current = id;
+              }
+              const payload = dataLine.slice(5).trim();
+              try {
+                const parsed = JSON.parse(payload) as { type?: string; info?: TestRunInfo };
+                if (parsed.type === "done") {
+                  if (parsed.info) setInfo(parsed.info);
+                  stopped = true;
+                  void refresh();
+                  break;
+                }
+              } catch {
+                // plain text event
+              }
+              setEvents((current) => [...current, payload].slice(-200));
+            }
           }
+        } catch {
+          // aborted or network error; fall through to retry
         }
+        if (stopped || controller.signal.aborted) return;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
       }
     };
-    void run().catch(() => undefined);
-    return () => controller.abort();
-  }, [runId, token]);
+    void connect();
+    return () => {
+      stopped = true;
+      controller.abort();
+    };
+  }, [runId, ready, active, authHeaders, refresh]);
+
+  useEffect(() => {
+    if (!info || active || finishedNotified.current) return;
+    finishedNotified.current = true;
+    window.sessionStorage.removeItem(`extensionlab:test-token:${runId}`);
+    // Give the persisted results a moment to land, then hand off to the report view.
+    const timer = setTimeout(() => onFinished?.(), 1200);
+    return () => clearTimeout(timer);
+  }, [info, active, runId, onFinished]);
 
   const stopTests = useCallback(async () => {
-    if (!token) return;
-    await fetch(`/api/tests/${runId}/stop`, {
-      method: "POST",
-      headers: { "x-sandbox-token": token },
-    }).catch(() => undefined);
-  }, [runId, token]);
+    await fetch(`/api/tests/${runId}/stop`, { method: "POST", headers: authHeaders }).catch(() => undefined);
+    void refresh();
+  }, [runId, authHeaders, refresh]);
 
   const visibleResults = useMemo(() => {
     return results.filter((result) => {
@@ -200,8 +259,11 @@ export function AutomatedTestRunView({ runId }: { runId: string }) {
     );
   }
 
-  const finished = info?.state === "completed" || info?.state === "timeout" || info?.state === "destroyed" || info?.state === "failed";
+  const finished = info ? !isActiveRunStatus(info.state) : false;
   const summary = summarizeResults(results);
+  const activity = describeActivity(events);
+  const noTestsExecuted = finished && (info?.outcome === "INFRASTRUCTURE_ERROR" || info?.outcome === "CANCELLED");
+  const currentStageIndex = info?.stage ? PIPELINE_STAGES.indexOf(info.stage as (typeof PIPELINE_STAGES)[number]) : info?.state === "queued" ? 0 : -1;
 
   return (
     <div className="space-y-5">
@@ -212,7 +274,9 @@ export function AutomatedTestRunView({ runId }: { runId: string }) {
           </span>
           <div>
             <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Automated Testing</h1>
-            <p className="text-sm text-[var(--text-secondary)]">{stateLabel(info?.state)}</p>
+            <p className="text-sm text-[var(--text-secondary)]">
+              {describeRunState({ state: info?.state, stage: info?.stage, outcome: info?.outcome, queuePosition: info?.queuePosition, reason: info?.reason })}
+            </p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -231,11 +295,55 @@ export function AutomatedTestRunView({ runId }: { runId: string }) {
         </div>
       </div>
 
+      {!finished ? (
+        <ol className="card card-pad flex flex-wrap gap-2" aria-label="Test pipeline stages">
+          {PIPELINE_STAGES.map((stage, index) => {
+            const state = index < currentStageIndex ? "done" : index === currentStageIndex ? "current" : "pending";
+            return (
+              <li
+                key={stage}
+                aria-current={state === "current" ? "step" : undefined}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium",
+                  state === "done" && "bg-[var(--status-success-soft)] text-[var(--status-success)]",
+                  state === "current" && "bg-[var(--accent-soft)] text-[var(--accent)]",
+                  state === "pending" && "bg-[var(--surface-secondary)] text-[var(--text-secondary)]",
+                )}
+              >
+                {state === "current" ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : null}
+                {state === "done" ? <CheckCircle2 className="h-3 w-3" aria-hidden="true" /> : null}
+                {stage}
+              </li>
+            );
+          })}
+        </ol>
+      ) : null}
+
+      {noTestsExecuted ? (
+        <div className="rounded-xl border border-[var(--status-warning)] bg-[var(--status-warning-soft)] p-4 text-sm text-[var(--text-primary)]" role="status">
+          <p className="font-semibold">{info?.outcome === "CANCELLED" ? "Run cancelled" : "No automated tests were executed"}</p>
+          <p className="mt-1 text-[var(--text-secondary)]">
+            {info?.reason ?? "The isolated browser could not be started, so no score is reported for this run."}
+          </p>
+        </div>
+      ) : null}
+
+      {!finished && activity.length > 0 ? (
+        <div className="card card-pad">
+          <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">Activity</p>
+          <ul className="mt-2 space-y-1 text-sm text-[var(--text-secondary)]" aria-live="polite">
+            {activity.map((line, index) => (
+              <li key={`${index}-${line}`}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       <div className="card card-pad grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Stat label="Tests" value={String(info?.total ?? summary.total)} />
         <Stat label="Passed" value={String(summary.passed)} tone="success" />
         <Stat label="Failed" value={String(summary.failed + summary.error + summary.timeout)} tone="error" />
-        <Stat label="Score" value={info ? `${info.score}/100` : "—"} accent />
+        <Stat label="Score" value={info && finished && !noTestsExecuted ? `${info.score}/100` : "—"} accent />
       </div>
 
       {summary.skipped > 0 ? (
@@ -405,19 +513,33 @@ function statusLabel(status: string): string {
   return labels[status] ?? status.toUpperCase();
 }
 
-function stateLabel(state?: string): string {
-  const labels: Record<string, string> = {
-    idle: "Preparing...",
-    preparing: "Preparing automated test suite...",
-    starting: "Creating sandbox and starting Chromium...",
-    running: "Running tests...",
-    completed: "Completed",
-    failed: "Failed",
-    timeout: "Timed out",
-    stopping: "Stopping tests...",
-    destroyed: "Destroyed",
-  };
-  return state ? labels[state] ?? state : "Preparing...";
+
+/** Turns durable job events into short, human-readable activity lines (last 6). */
+function describeActivity(events: string[]): string[] {
+  const lines: string[] = [];
+  for (const raw of events) {
+    try {
+      const event = JSON.parse(raw) as {
+        type?: string;
+        stage?: string;
+        state?: string;
+        reason?: string;
+        attempt?: number;
+        testId?: string;
+        result?: { name?: string; status?: string };
+      };
+      if (event.type === "stage" && event.stage) lines.push(`Stage: ${event.stage}`);
+      else if (event.type === "state" && event.state === "retrying") lines.push(`Retrying${event.attempt ? ` (attempt ${event.attempt})` : ""}${event.reason ? ` · ${event.reason}` : ""}`);
+      else if (event.type === "state" && event.state === "running" && !event.stage) lines.push("Worker picked up the run");
+      else if (event.type === "state" && event.state === "stopping") lines.push("Stop requested · shutting the sandbox down");
+      else if (event.type === "state" && event.state === "queued" && event.attempt === undefined && lines.length === 0) lines.push("Queued");
+      else if (event.type === "test" && event.state === "running" && event.testId) lines.push(`Running: ${event.testId}`);
+      else if (event.type === "test-result" && event.result?.name) lines.push(`${(event.result.status ?? "done").toUpperCase()}: ${event.result.name}`);
+    } catch {
+      // ignore malformed
+    }
+  }
+  return lines.slice(-6);
 }
 
 function severityClass(severity: string): string {

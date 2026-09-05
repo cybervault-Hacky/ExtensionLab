@@ -12,6 +12,9 @@ import { createShare, getActiveShareForReport, revokeShare } from "@/lib/db/repo
 import { generateShareToken } from "@/lib/db/ids";
 import { isSafeId } from "@/lib/auth/validation";
 import { recordAuditEvent } from "@/lib/db/repositories/audit";
+import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
+import { getClientIp } from "@/lib/runtime/api-helpers";
+import { rateLimited } from "@/lib/auth/api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,6 +28,8 @@ export async function POST(
   try {
     requireSameOrigin(request);
     const user = requireApiUser(request);
+    const limit = enforceRateLimit("shareCreate", `${user.id}:${getClientIp(request)}`);
+    if (!limit.ok) throw rateLimited(limit.retryAfterSeconds);
     const { id } = await context.params;
     if (!isSafeId(id)) throw new ApiError(404, "not_found", "Report not found.");
     const report = getOwnedReport(user.id, id);
@@ -50,7 +55,7 @@ export async function POST(
       { status: 201 },
     );
   } catch (error) {
-    return apiErrorResponse(error);
+    return apiErrorResponse(error, request);
   }
 }
 
@@ -72,6 +77,6 @@ export async function DELETE(
     }
     return NextResponse.json({ ok: true });
   } catch (error) {
-    return apiErrorResponse(error);
+    return apiErrorResponse(error, request);
   }
 }

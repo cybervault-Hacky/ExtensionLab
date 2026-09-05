@@ -47,10 +47,25 @@ export function createReportView(
     runtimeTests: {
       score: report.runtime_score,
       summary: testSummary ?? null,
+      // Phase 6: distinguishes "tests ran" from "sandbox never started".
+      status: runtimeStatusOf(report, runtimeTests),
+      outcome: typeof runtimeTests?.outcome === "string" ? runtimeTests.outcome : null,
+      reason: typeof runtimeTests?.reason === "string" ? runtimeTests.reason : null,
     },
     findings: runtimeTests?.details ? extractFindings(runtimeTests.details) : [],
     generatedWith: "ExtensionLab",
   };
+}
+
+function runtimeStatusOf(
+  report: ReportViewSource,
+  runtimeTests: Record<string, unknown> | undefined,
+): "executed" | "not-executed" | "none" {
+  if (!runtimeTests) return "none";
+  if (runtimeTests.runtimeStatus === "not-executed") return "not-executed";
+  if (runtimeTests.runtimeStatus === "executed") return "executed";
+  // Legacy Phase 5 reports: a stored runtime score means tests executed.
+  return report.runtime_score !== null ? "executed" : "not-executed";
 }
 
 function extractFindings(value: unknown): unknown[] {
@@ -68,7 +83,7 @@ export function createPublicReportView(
     report: Record<string, unknown>;
     extension: Record<string, unknown>;
     staticAnalysis: Record<string, unknown>;
-    runtimeTests: { score: number | null; summary: Record<string, unknown> | null };
+    runtimeTests: { score: number | null; summary: Record<string, unknown> | null; status: string; outcome: string | null };
     findings: unknown[];
   };
   return {
@@ -76,7 +91,8 @@ export function createPublicReportView(
     extension: privateView.extension.name ?? "Browser extension",
     staticScore: privateView.staticAnalysis.healthScore,
     runtimeScore: privateView.runtimeTests.score,
-    tests: privateView.runtimeTests.summary,
+    runtimeStatus: privateView.runtimeTests.status,
+    tests: privateView.runtimeTests.status === "executed" ? privateView.runtimeTests.summary : null,
     findings: sanitizeFindings(privateView.findings),
     generatedWith: "ExtensionLab",
   };

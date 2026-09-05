@@ -1,0 +1,1 @@
+This is not a ZIP archive. It exists to verify that invalid uploads are rejected before storage.

@@ -7,13 +7,14 @@ export function createSnapshot(input: {
   healthScore: number;
   manifestVersion: string | null;
   analysisJson: string;
+  packageId?: string | null;
 }): AnalysisSnapshotRow {
   const db = getDb();
   const now = Date.now();
   const id = generateDbId("ana");
   db.prepare(
-    `INSERT INTO analysis_snapshots (id, extension_id, health_score, manifest_version, analysis_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO analysis_snapshots (id, extension_id, health_score, manifest_version, analysis_json, created_at, package_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.extensionId,
@@ -21,6 +22,7 @@ export function createSnapshot(input: {
     input.manifestVersion,
     input.analysisJson,
     now,
+    input.packageId ?? null,
   );
   return getSnapshotById(id)!;
 }

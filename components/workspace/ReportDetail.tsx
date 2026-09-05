@@ -31,6 +31,9 @@ interface ReportView {
   runtimeTests: {
     score: number | null;
     summary: Record<string, unknown> | null;
+    status?: "executed" | "not-executed" | "none";
+    outcome?: string | null;
+    reason?: string | null;
   };
   findings: Array<{ id?: string; severity: string; category: string; title: string; description: string; recommendation: string; evidence: string[] }>;
 }
@@ -134,6 +137,7 @@ export function ReportDetail({ reportId }: { reportId: string }) {
   }
 
   const summary = data.runtimeTests.summary ?? {};
+  const runtimeStatus = data.runtimeTests.status ?? (data.runtimeTests.score !== null ? "executed" : "none");
 
   return (
     <div className="space-y-6">
@@ -159,7 +163,11 @@ export function ReportDetail({ reportId }: { reportId: string }) {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <ScoreCard label="Static Analysis" score={data.staticAnalysis.healthScore} />
-        <ScoreCard label="Runtime Tests" score={data.runtimeTests.score} />
+        <ScoreCard
+          label="Runtime Tests"
+          score={runtimeStatus === "executed" ? data.runtimeTests.score : null}
+          note={runtimeStatus === "not-executed" ? (data.runtimeTests.outcome === "CANCELLED" ? "Cancelled" : "Not executed") : runtimeStatus === "none" ? "No run attached" : undefined}
+        />
         <ScoreCard label="Overall" score={data.report.overallScore} accent />
       </div>
 
@@ -209,6 +217,16 @@ export function ReportDetail({ reportId }: { reportId: string }) {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card>
           <h2 className="text-base font-semibold tracking-tight">Test Results</h2>
+          {runtimeStatus === "not-executed" ? (
+            <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--surface-secondary)] p-3">
+              <p className="text-sm font-medium">
+                {data.runtimeTests.outcome === "CANCELLED" ? "The attached test run was cancelled." : "Infrastructure error — no automated tests were executed."}
+              </p>
+              <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                {data.runtimeTests.reason ?? "The isolated browser could not be started for this run. Static analysis results above are unaffected."}
+              </p>
+            </div>
+          ) : null}
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
             <ResultStat label="Total" value={String(number(summary.total))} />
             <ResultStat label="Passed" value={String(number(summary.passed))} tone="success" />
@@ -270,14 +288,15 @@ export function ReportDetail({ reportId }: { reportId: string }) {
   );
 }
 
-function ScoreCard({ label, score, accent }: { label: string; score: number | null; accent?: boolean }) {
+function ScoreCard({ label, score, accent, note }: { label: string; score: number | null; accent?: boolean; note?: string }) {
   return (
     <Card>
       <p className="text-sm text-[var(--text-secondary)]">{label}</p>
       <p className={accent ? "mt-1 text-4xl font-semibold tracking-tight text-[var(--accent)]" : "mt-1 text-4xl font-semibold tracking-tight"}>
         {score ?? "—"}
-        <span className="text-lg font-normal text-[var(--text-secondary)]">/100</span>
+        {score !== null ? <span className="text-lg font-normal text-[var(--text-secondary)]">/100</span> : null}
       </p>
+      {note ? <p className="mt-1 text-xs text-[var(--text-secondary)]">{note}</p> : null}
     </Card>
   );
 }

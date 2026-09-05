@@ -1,13 +1,33 @@
 #!/usr/bin/env node
+/**
+ * Explicit migration runner: `npm run db:migrate`.
+ *
+ * Applies every pending SQL file from lib/db/migrations in lexical order
+ * inside a transaction. Safe to run repeatedly, on a fresh database and on an
+ * existing Phase 5 database. Existing rows are never modified or deleted.
+ */
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const root = process.cwd();
-const dbPath =
-  process.env.EXTENSIONLAB_DB_PATH ??
-  process.env.DATABASE_PATH ??
-  join(root, "data", "extensionlab.sqlite");
+
+function resolveDatabasePath(env) {
+  const url = env.DATABASE_URL?.trim();
+  if (url) {
+    if (url === ":memory:" || url === "sqlite::memory:") return ":memory:";
+    if (url.startsWith("sqlite:")) return url.replace(/^sqlite:(\/\/)?/, "");
+    if (url.startsWith("postgres://") || url.startsWith("postgresql://")) {
+      console.error("DATABASE_URL points to PostgreSQL. This build ships the SQLite driver only; see docs/DEPLOYMENT.md.");
+      process.exit(1);
+    }
+    return url;
+  }
+  return env.EXTENSIONLAB_DB_PATH?.trim() || env.DATABASE_PATH?.trim() || join(root, "data", "extensionlab.sqlite");
+}
+
+const dbPath = resolveDatabasePath(process.env);
+const dryRun = process.argv.includes("--dry-run") || process.argv.includes("--status");
 
 if (dbPath !== ":memory:") {
   mkdirSync(dirname(dbPath), { recursive: true });
@@ -32,8 +52,17 @@ const applied = new Set(
 const dir = join(root, "lib", "db", "migrations");
 const files = readdirSync(dir).filter((name) => name.endsWith(".sql")).sort();
 
+let pending = 0;
 for (const file of files) {
-  if (applied.has(file)) continue;
+  if (applied.has(file)) {
+    console.log(`already applied ${file}`);
+    continue;
+  }
+  pending += 1;
+  if (dryRun) {
+    console.log(`pending ${file}`);
+    continue;
+  }
   const sql = readFileSync(join(dir, file), "utf8");
   db.exec("BEGIN");
   try {
@@ -43,9 +72,15 @@ for (const file of files) {
     console.log(`applied ${file}`);
   } catch (error) {
     db.exec("ROLLBACK");
-    throw error;
+    console.error(`failed ${file}: ${error instanceof Error ? error.message : String(error)}`);
+    db.close();
+    process.exit(1);
   }
 }
 
 db.close();
-console.log(`database ready at ${dbPath}`);
+if (dryRun) {
+  console.log(pending === 0 ? "database schema is up to date" : `${pending} migration(s) pending`);
+} else {
+  console.log(`database ready (${files.length} migration(s) applied)`);
+}

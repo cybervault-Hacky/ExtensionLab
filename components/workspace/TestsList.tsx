@@ -6,6 +6,7 @@ import { Search } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { isActiveRunStatus, runOutcomeLabel, runOutcomeTone, runScoreLabel } from "@/lib/testing/status-labels";
 
 type FilterKey = "all" | "passed" | "failed" | "warnings" | "running" | "cancelled";
 
@@ -21,6 +22,9 @@ const filters: Array<{ key: FilterKey; label: string }> = [
 interface RunItem {
   id: string;
   status: string;
+  outcome?: string | null;
+  error_code?: string | null;
+  stage?: string | null;
   score: number;
   total: number;
   passed: number;
@@ -59,6 +63,14 @@ export function TestsList() {
     const timer = setTimeout(() => void load(), 180);
     return () => clearTimeout(timer);
   }, [load]);
+
+  // Keep the list fresh while any run is still queued or executing.
+  const hasActive = items.some((item) => isActiveRunStatus(item.status));
+  useEffect(() => {
+    if (!hasActive) return;
+    const timer = setInterval(() => void load(), 5000);
+    return () => clearInterval(timer);
+  }, [hasActive, load]);
 
   return (
     <div className="space-y-5">
@@ -141,12 +153,14 @@ export function TestsList() {
                     {relativeTime(item.created_at)}
                   </span>
                 </span>
-                <span className="col-span-2 text-sm font-semibold">{item.score}/100</span>
+                <span className="col-span-2 text-sm font-semibold">{runScoreLabel(item)}</span>
                 <span className="col-span-2">
-                  <Badge tone={toneFor(item.status)}>{displayStatus(item.status)}</Badge>
+                  <Badge tone={runOutcomeTone(item)}>{runOutcomeLabel(item)}</Badge>
                 </span>
                 <span className="col-span-2 text-sm text-[var(--text-secondary)]">
-                  {item.passed + item.failed + item.warnings + item.skipped}/{item.total} completed
+                  {isActiveRunStatus(item.status) && item.stage
+                    ? item.stage
+                    : `${item.passed + item.failed + item.warnings + item.skipped}/${item.total} completed`}
                 </span>
                 <span className="col-span-1 text-right text-xs text-[var(--text-secondary)] md:text-sm">
                   {relativeTime(item.created_at)}
@@ -171,19 +185,4 @@ function relativeTime(timestamp: number): string {
   return `${days}d ago`;
 }
 
-function displayStatus(status: string): string {
-  if (status === "completed") return "Passed";
-  if (status === "failed") return "Failed";
-  if (status === "timeout") return "Timeout";
-  if (status === "destroyed") return "Cancelled";
-  if (["idle", "preparing", "starting", "running", "stopping"].includes(status)) return "Running";
-  return status;
-}
 
-function toneFor(status: string): "success" | "error" | "warning" | "info" | "neutral" {
-  if (status === "completed") return "success";
-  if (status === "failed" || status === "timeout") return "error";
-  if (status === "destroyed") return "neutral";
-  if (["idle", "preparing", "starting", "running", "stopping"].includes(status)) return "info";
-  return "neutral";
-}

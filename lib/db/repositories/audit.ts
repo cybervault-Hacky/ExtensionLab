@@ -10,7 +10,9 @@ export type AuditEventType =
   | "password_reset"
   | "account_delete"
   | "share_created"
-  | "share_revoked";
+  | "share_revoked"
+  | "package_delete"
+  | "test_run_cancel";
 
 export function recordAuditEvent(input: {
   userId: string | null;

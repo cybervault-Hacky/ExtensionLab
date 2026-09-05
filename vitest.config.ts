@@ -15,6 +15,7 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    exclude: ["**/node_modules/**", "tests/e2e/**"],
     server: {
       deps: {
         external: ["node:sqlite"],

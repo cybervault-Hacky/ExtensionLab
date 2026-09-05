@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { apiErrorResponse, requireApiUser } from "@/lib/auth/api";
-import { listTestRuns } from "@/lib/db/repositories/test-runs";
+import { listTestRuns, toTestRunListItem } from "@/lib/db/repositories/test-runs";
 import type { TestRunFilter } from "@/lib/db/repositories/test-runs";
 import { parsePagination } from "@/lib/auth/validation";
 
@@ -24,13 +24,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       search: url.searchParams.get("q") ?? undefined,
     });
     return NextResponse.json({
-      items: data.items,
+      items: data.items.map(toTestRunListItem),
       page: page.page,
       limit: page.limit,
       total: data.total,
       filter,
     });
   } catch (error) {
-    return apiErrorResponse(error);
+    return apiErrorResponse(error, request);
   }
 }

@@ -52,6 +52,7 @@ export interface AnalysisSnapshotRow {
   manifest_version: string | null;
   analysis_json: string;
   created_at: number;
+  package_id?: string | null;
 }
 
 export interface TestRunRow {
@@ -74,6 +75,14 @@ export interface TestRunRow {
   events_json: string | null;
   created_at: number;
   updated_at: number;
+  /** Phase 6 additions (nullable for rows created before migration 002). */
+  package_id?: string | null;
+  job_id?: string | null;
+  stage?: string | null;
+  outcome?: string | null;
+  error_code?: string | null;
+  reason?: string | null;
+  access_token_hash?: string | null;
 }
 
 export interface ReportRow {
@@ -114,4 +123,90 @@ export interface UsageEventRow {
   user_id: string;
   kind: string;
   created_at: number;
+}
+
+/** Phase 6 rows. */
+export interface ExtensionPackageRow {
+  id: string;
+  user_id: string;
+  extension_id: string | null;
+  storage_key: string;
+  sha256: string;
+  size: number;
+  version: string | null;
+  original_name: string | null;
+  status: string;
+  created_at: number;
+  updated_at: number;
+  last_used_at: number | null;
+}
+
+export interface JobRow {
+  id: string;
+  type: string;
+  user_id: string | null;
+  status: string;
+  priority: number;
+  attempts: number;
+  max_attempts: number;
+  payload_json: string;
+  result_json: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  idempotency_key: string | null;
+  resource_type: string | null;
+  resource_id: string | null;
+  worker_id: string | null;
+  lease_expires_at: number | null;
+  run_after: number;
+  cancel_requested_at: number | null;
+  created_at: number;
+  updated_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+}
+
+export interface JobEventRow {
+  id: number;
+  job_id: string;
+  kind: string;
+  stage: string | null;
+  payload: string;
+  created_at: number;
+}
+
+export interface WorkerRow {
+  id: string;
+  started_at: number;
+  last_seen_at: number;
+  concurrency: number;
+  active_jobs: number;
+  sandbox_available: number | null;
+  sandbox_detail: string | null;
+  stopping: number;
+}
+
+export interface QuotaReservationRow {
+  id: string;
+  user_id: string;
+  kind: string;
+  resource_id: string | null;
+  job_id: string | null;
+  created_at: number;
+  consumed_at: number | null;
+  released_at: number | null;
+}
+
+export interface ArtifactRow {
+  id: string;
+  test_run_id: string;
+  user_id: string;
+  type: string;
+  storage_key: string;
+  size: number;
+  sha256: string;
+  content_type: string;
+  label: string | null;
+  created_at: number;
+  expires_at: number;
 }
