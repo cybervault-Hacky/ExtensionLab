@@ -14,6 +14,9 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { PaywallNotice, paywallFromError, type PaywallInfo } from "@/components/billing/PaywallNotice";
 import type { ApiErrorPayload } from "@/components/billing/types";
+import { AskAboutReport, ExplainFinding, ReportSummary, SuggestTests } from "@/components/ai/AIFeatures";
+import { AIBadge, VerifiedBadge, evidenceAnchor } from "@/components/ai/AIPanel";
+import type { AIEvidenceRef } from "@/components/ai/types";
 
 interface ReportView {
   report: {
@@ -48,6 +51,8 @@ export function ReportDetail({ reportId }: { reportId: string }) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [paywall, setPaywall] = useState<PaywallInfo | null>(null);
+  const [explaining, setExplaining] = useState<string | null>(null);
+  const [aiAvailable, setAiAvailable] = useState<boolean | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -65,6 +70,33 @@ export function ReportDetail({ reportId }: { reportId: string }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Deployment-level AI availability only (no AI request is made on load).
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/me")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: { ai?: { available?: boolean } } | null) => {
+        if (!cancelled) setAiAvailable(Boolean(payload?.ai?.available));
+      })
+      .catch(() => {
+        if (!cancelled) setAiAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const jumpToEvidence = useCallback((ref: AIEvidenceRef) => {
+    const anchor = evidenceAnchor(ref);
+    if (!anchor) return;
+    const element = document.getElementById(anchor);
+    if (element) {
+      element.scrollIntoView({ behavior: "smooth", block: "center" });
+      element.classList.add("ring-2", "ring-[var(--accent)]");
+      setTimeout(() => element.classList.remove("ring-2", "ring-[var(--accent)]"), 1600);
+    }
+  }, []);
 
   const share = useCallback(
     async (expiresInHours: number) => {
@@ -171,7 +203,7 @@ export function ReportDetail({ reportId }: { reportId: string }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div id="section-scores" className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <ScoreCard label="Static Analysis" score={data.staticAnalysis.healthScore} />
         <ScoreCard
           label="Runtime Tests"
@@ -225,7 +257,28 @@ export function ReportDetail({ reportId }: { reportId: string }) {
         {error ? <p className="mt-3 text-sm text-[var(--status-error)]">{error}</p> : null}
       </Card>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-base font-semibold tracking-tight">AI assistance</h2>
+          <AIBadge>AI interpretation</AIBadge>
+        </div>
+        <p className="mt-2 text-sm text-[var(--text-secondary)]">
+          Optional explanations generated from this report&apos;s saved evidence. Scores, findings and test results above are produced by ExtensionLab&apos;s deterministic analysis and are not changed by AI.
+        </p>
+        {aiAvailable === false ? (
+          <p className="mt-4 text-sm text-[var(--text-secondary)]">AI assistance is currently unavailable.</p>
+        ) : (
+          <div className="mt-4 space-y-4">
+            <div className="flex flex-wrap gap-2">
+              <ReportSummary reportId={reportId} onJump={jumpToEvidence} className="w-full" />
+            </div>
+            <SuggestTests reportId={reportId} onJump={jumpToEvidence} className="w-full" />
+            <AskAboutReport reportId={reportId} onJump={jumpToEvidence} />
+          </div>
+        )}
+      </Card>
+
+      <div id="section-runtime-tests" className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card>
           <h2 className="text-base font-semibold tracking-tight">Test Results</h2>
           {runtimeStatus === "not-executed" ? (
@@ -246,28 +299,46 @@ export function ReportDetail({ reportId }: { reportId: string }) {
           </div>
         </Card>
 
-        <Card>
-          <h2 className="text-base font-semibold tracking-tight">Diagnostics</h2>
+        <Card id="section-diagnostics">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-base font-semibold tracking-tight">Diagnostics</h2>
+            <VerifiedBadge />
+          </div>
           {data.findings.length === 0 ? (
             <p className="mt-4 text-sm text-[var(--text-secondary)]">No significant diagnostics in this snapshot.</p>
           ) : (
             <div className="mt-4 space-y-3">
-              {data.findings.slice(0, 8).map((finding, index) => (
-                <div key={`${finding.title}-${index}`} className="rounded-xl border border-[var(--border)] p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium">{finding.title}</p>
-                    <Badge tone={severityTone(finding.severity)}>{finding.severity}</Badge>
+              {data.findings.slice(0, 8).map((finding, index) => {
+                const key = finding.id ?? `${finding.title}-${index}`;
+                return (
+                  <div key={key} id={finding.id ? evidenceAnchor({ kind: "diagnostic", id: finding.id, label: finding.title }) ?? undefined : undefined} className="rounded-xl border border-[var(--border)] p-3 transition-shadow">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-medium">{finding.title}</p>
+                      <Badge tone={severityTone(finding.severity)}>{finding.severity}</Badge>
+                    </div>
+                    <p className="mt-1 text-sm text-[var(--text-secondary)]">{finding.description}</p>
+                    {finding.id && aiAvailable !== false ? (
+                      explaining === finding.id ? (
+                        <ExplainFinding reportId={reportId} findingId={finding.id} onJump={jumpToEvidence} className="mt-3" />
+                      ) : (
+                        <button type="button" onClick={() => setExplaining(finding.id ?? null)} className="mt-2 text-xs font-medium text-[var(--accent)]">
+                          Explain with AI
+                        </button>
+                      )
+                    ) : null}
                   </div>
-                  <p className="mt-1 text-sm text-[var(--text-secondary)]">{finding.description}</p>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </Card>
       </div>
 
-      <Card>
-        <h2 className="text-base font-semibold tracking-tight">Findings</h2>
+      <Card id="section-static-analysis">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-base font-semibold tracking-tight">Findings</h2>
+          <VerifiedBadge />
+        </div>
         <p className="mt-2 text-sm text-[var(--text-secondary)]">
           Static analysis findings from the saved snapshot.
         </p>
@@ -275,14 +346,30 @@ export function ReportDetail({ reportId }: { reportId: string }) {
           {data.staticAnalysis.issues.length === 0 ? (
             <p className="text-sm text-[var(--text-secondary)]">No static issues recorded.</p>
           ) : (
-            data.staticAnalysis.issues.map((issue) => {
+            data.staticAnalysis.issues.map((issue, index) => {
               const item = issue as Record<string, unknown>;
+              const findingId = typeof item.id === "string" ? item.id : null;
               return (
-                <div key={String(item.id ?? issue)} className="flex items-start gap-3 rounded-xl border border-[var(--border)] p-3">
-                  <Badge tone={severityTone(String(item.severity))}>{String(item.severity)}</Badge>
-                  <div>
-                    <p className="text-sm font-medium">{String(item.title ?? "Finding")}</p>
-                    <p className="text-sm text-[var(--text-secondary)]">{String(item.message ?? "")}</p>
+                <div
+                  key={findingId ?? index}
+                  id={findingId ? evidenceAnchor({ kind: "finding", id: findingId, label: "" }) ?? undefined : undefined}
+                  className="rounded-xl border border-[var(--border)] p-3 transition-shadow"
+                >
+                  <div className="flex items-start gap-3">
+                    <Badge tone={severityTone(String(item.severity))}>{String(item.severity)}</Badge>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">{String(item.title ?? "Finding")}</p>
+                      <p className="text-sm text-[var(--text-secondary)]">{String(item.message ?? "")}</p>
+                      {findingId && aiAvailable !== false ? (
+                        explaining === findingId ? (
+                          <ExplainFinding reportId={reportId} findingId={findingId} onJump={jumpToEvidence} className="mt-3" />
+                        ) : (
+                          <button type="button" onClick={() => setExplaining(findingId)} className="mt-2 text-xs font-medium text-[var(--accent)]">
+                            Explain with AI
+                          </button>
+                        )
+                      ) : null}
+                    </div>
                   </div>
                 </div>
               );

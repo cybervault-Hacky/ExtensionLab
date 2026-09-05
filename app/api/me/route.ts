@@ -9,6 +9,7 @@ import {
   requireSameOrigin,
 } from "@/lib/auth/api";
 import { getEffectivePlan, getQuotaUsage } from "@/lib/billing/entitlements";
+import { isAIEnabled } from "@/lib/ai/provider";
 import { getActiveUserSessions, clearSessionCookie, logoutAllSessions } from "@/lib/auth/session";
 import {
   findUserByEmail,
@@ -32,6 +33,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const plan = effective.plan;
     const analyses = getQuotaUsage(user.id, "analysis");
     const testRuns = getQuotaUsage(user.id, "test_run");
+    const aiRequests = getQuotaUsage(user.id, "ai_request");
     return NextResponse.json({
       user,
       plan: {
@@ -43,14 +45,21 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         maxConcurrentRuns: plan.maxConcurrentRuns,
         historyRetentionDays: plan.historyRetentionDays,
         sharingEnabled: plan.sharingEnabled,
+        // Phase 8: plan-level AI entitlement (the server still decides per request).
+        aiEnabled: plan.aiEnabled && plan.aiRequestLimit > 0,
+        aiRequestLimit: plan.aiEnabled ? plan.aiRequestLimit : 0,
         billingState: effective.state,
         paidUntil: effective.paidUntil,
       },
+      /** Deployment-level availability; false when no AI provider is configured. */
+      ai: { available: isAIEnabled() },
       usage: {
         analysisUsed: analyses.used,
         testRunUsed: testRuns.used,
         analysisReserved: analyses.reserved,
         testRunReserved: testRuns.reserved,
+        aiUsed: aiRequests.used,
+        aiReserved: aiRequests.reserved,
         resetAt: analyses.resetAt,
         periodStart: analyses.period.start,
         periodEnd: analyses.period.end,

@@ -158,6 +158,25 @@ return URLs are built from it. The webhook endpoint must receive the raw
 request body (no JSON re-serialisation by a proxy). Full setup, lifecycle and
 troubleshooting: [BILLING.md](BILLING.md).
 
+### AI assistance (Phase 8)
+
+| Variable | Notes |
+| --- | --- |
+| `AI_PROVIDER` | `openai` (any OpenAI-compatible chat-completions endpoint), `fake` (dev/test only, rejected in production) or `disabled` (default in production: AI controls report "AI assistance is currently unavailable.", everything else works) |
+| `AI_API_KEY` | required for `openai`; read from the environment only, never logged, stored or shipped to the browser |
+| `AI_MODEL` | model name passed to the provider (`gpt-4o-mini`) |
+| `AI_BASE_URL` | endpoint base (`https://api.openai.com/v1`); must be https in production and must not contain credentials or query strings |
+| `AI_TIMEOUT` | seconds per provider call (20; `AI_TIMEOUT_MS` also accepted) |
+| `AI_MAX_REQUEST_BYTES`, `AI_MAX_CONTEXT_BYTES`, `AI_MAX_OUTPUT_TOKENS`, `AI_MAX_RESPONSE_BYTES` | 16 KiB request body / 24 KiB sanitized evidence / 1200 completion tokens / 64 KiB provider response |
+| `AI_MAX_CONCURRENCY`, `AI_MAX_CONCURRENCY_PER_USER` | in-flight provider calls per web process (4) and per user (1) |
+| `AI_RESULT_RETENTION_DAYS` | validated results are stored for reuse and deleted by the cleanup job after this many days (30) |
+| `RATE_LIMIT_AI_PER_MIN` | per-user AI request limit (10), independent of the analysis/test limits |
+| `PLAN_<FREE|PRO|BUSINESS>_AI_ENABLED`, `PLAN_<PLAN>_AI_LIMIT` | plan entitlement and requests per billing period (Free not included, Pro 100, Business 500) |
+
+Outbound egress from the web process to `AI_BASE_URL` is required only when
+`AI_PROVIDER=openai`. Rollout, privacy posture and failure behaviour:
+[AI.md](AI.md).
+
 ## Build and run without containers
 
 ```bash

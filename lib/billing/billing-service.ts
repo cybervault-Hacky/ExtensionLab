@@ -51,6 +51,7 @@ export interface BillingStateView {
     period: { start: number; end: number; source: "calendar" | "subscription" };
     analyses: { used: number; reserved: number; limit: number; remaining: number; resetAt: number };
     testRuns: { used: number; reserved: number; limit: number; remaining: number; resetAt: number };
+    aiRequests: { used: number; reserved: number; limit: number; remaining: number; resetAt: number };
   };
   plans: PlanView[];
 }
@@ -60,6 +61,7 @@ export function buildBillingState(userId: string, now = Date.now()): BillingStat
   const period = getUsagePeriod(effective, now);
   const analyses = getQuotaUsage(userId, "analysis", now);
   const testRuns = getQuotaUsage(userId, "test_run", now);
+  const aiRequests = getQuotaUsage(userId, "ai_request", now);
   const catalog = getPlanCatalog();
   const enabled = isBillingEnabled();
   const capabilities = enabled ? getBillingProvider().capabilities : null;
@@ -74,6 +76,7 @@ export function buildBillingState(userId: string, now = Date.now()): BillingStat
       period: { start: period.start, end: period.end, source: period.source },
       analyses: { used: analyses.used, reserved: analyses.reserved, limit: analyses.limit, remaining: analyses.remaining, resetAt: analyses.resetAt },
       testRuns: { used: testRuns.used, reserved: testRuns.reserved, limit: testRuns.limit, remaining: testRuns.remaining, resetAt: testRuns.resetAt },
+      aiRequests: { used: aiRequests.used, reserved: aiRequests.reserved, limit: aiRequests.limit, remaining: aiRequests.remaining, resetAt: aiRequests.resetAt },
     },
     plans: orderedPlans(catalog).map((plan) => toPlanView(plan, formatPlanAmount(plan))),
   };

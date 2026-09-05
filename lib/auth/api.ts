@@ -8,6 +8,7 @@ import { generateReferenceId } from "@/lib/runtime/ids";
 import { AppError, ERROR_CATALOG, LEGACY_CODE_MAP, classifyError, type ErrorCode } from "@/lib/observability/errors";
 import { generateRequestId, logger, resolveRequestId } from "@/lib/observability/logger";
 import { QuotaExceededError } from "@/lib/db/repositories/quota";
+import type { UsageKind } from "@/lib/db/repositories/usage";
 import type { EntitlementResult, QuotaDenial } from "@/lib/billing/entitlements";
 import { getPlan } from "@/lib/billing/config";
 import type { PlanId } from "@/lib/billing/types";
@@ -21,6 +22,7 @@ type ApiErrorCode =
   | "limit_reached"
   | "conflict"
   | "invalid_input"
+  | "unavailable"
   | "internal";
 
 /**
@@ -82,7 +84,7 @@ export const usageLimit = (label: string) =>
  */
 export interface EntitlementDetails {
   reason: "quota" | "plan" | "size";
-  kind?: "analysis" | "test_run";
+  kind?: UsageKind;
   currentUsage?: number;
   limit?: number;
   resetAt?: number;
@@ -111,7 +113,7 @@ export class EntitlementError extends Error {
   }
 }
 
-const KIND_LABEL: Record<"analysis" | "test_run", string> = { analysis: "analysis", test_run: "automated test run" };
+const KIND_LABEL: Record<UsageKind, string> = { analysis: "analysis", test_run: "automated test run", ai_request: "AI assistance" };
 
 function planName(planId: PlanId | null): string | null {
   return planId ? getPlan(planId).name : null;
@@ -133,6 +135,9 @@ export function quotaDenialDetails(denial: QuotaDenial): EntitlementDetails {
 function quotaMessage(denial: QuotaDenial): string {
   const plan = getPlan(denial.planId).name;
   const upgrade = denial.requiredPlan ? ` Upgrade to ${getPlan(denial.requiredPlan).name} for more.` : "";
+  if (denial.kind === "ai_request") {
+    return `AI usage limit reached. Your ${plan} plan includes ${denial.limit} AI requests per billing period.${upgrade}`;
+  }
   return `Your ${plan} plan ${KIND_LABEL[denial.kind]} limit (${denial.limit} per billing period) has been reached.${upgrade}`;
 }
 
@@ -143,7 +148,13 @@ function quotaMessage(denial: QuotaDenial): string {
 export function assertEntitled(result: EntitlementResult, currentPlan?: PlanId): void {
   if (result.allowed) return;
   if (result.reason === "quota") {
-    throw new EntitlementError(429, "limit_reached", "QUOTA_EXCEEDED", quotaMessage(result.quota), quotaDenialDetails(result.quota));
+    throw new EntitlementError(
+      429,
+      "limit_reached",
+      result.quota.kind === "ai_request" ? "AI_QUOTA_EXCEEDED" : "QUOTA_EXCEEDED",
+      quotaMessage(result.quota),
+      quotaDenialDetails(result.quota),
+    );
   }
   const plan = currentPlan ?? "free";
   if (result.reason === "size") {
@@ -251,7 +262,7 @@ function describeError(error: unknown): {
     return {
       status: 429,
       code: "limit_reached",
-      errorCode: "QUOTA_EXCEEDED",
+      errorCode: denial.kind === "ai_request" ? "AI_QUOTA_EXCEEDED" : "QUOTA_EXCEEDED",
       message: quotaMessage(denial),
       referenceId: generateReferenceId(),
       details: quotaDenialDetails(denial),
@@ -305,7 +316,20 @@ function legacyCodeFor(code: ErrorCode): ApiErrorCode {
     case "SUBSCRIPTION_NOT_FOUND":
       return "not_found";
     case "PAYMENT_REQUIRED":
+    case "AI_QUOTA_EXCEEDED":
       return "limit_reached";
+    case "AI_RATE_LIMITED":
+      return "rate_limited";
+    case "AI_UNAUTHORIZED_CONTEXT":
+      return "not_found";
+    case "AI_CONTEXT_TOO_LARGE":
+      return "bad_request";
+    case "AI_NOT_CONFIGURED":
+    case "AI_UNAVAILABLE":
+    case "AI_PROVIDER_ERROR":
+    case "AI_TIMEOUT":
+    case "AI_INVALID_OUTPUT":
+      return "unavailable";
     default:
       return "internal";
   }

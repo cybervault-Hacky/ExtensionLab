@@ -139,6 +139,52 @@ container. `docker-compose.prod.yml` follows this split.
   (retryable) if the provider call fails, so a deleted account can never keep
   being charged.
 
+## AI assistance (Phase 8)
+
+- **Assistant, not authority.** Scores, findings, test results, ownership and
+  billing are computed by the deterministic systems; AI only explains data
+  they already produced. Every AI panel is labelled "AI interpretation" with
+  a confidence level and the disclaimer, next to "Verified by ExtensionLab"
+  content, and nothing AI-generated is written back into analyses, reports
+  or tests.
+- **No execution path.** The model has no tools; its output is JSON data
+  validated against a strict schema. Generated test suggestions pass the
+  Phase 4 action/assertion/selector/URL allowlists on the server
+  (`lib/ai/test-suggestions.ts`) and, if run, go through the normal
+  `POST /api/tests/create` validation. Shell, JavaScript, CDP, filesystem,
+  Docker or network operations cannot be expressed.
+- **Access control.** Every `/api/ai/*` route requires a session and passes
+  `requireSameOrigin`; resources are loaded through the owner-scoped
+  repositories, and a finding/test must belong to that resource (otherwise
+  `404 AI_UNAUTHORIZED_CONTEXT`, indistinguishable from a missing resource).
+  Public share tokens are never accepted and share pages render no AI
+  content.
+- **Data minimisation and redaction.** Context builders copy only
+  allowlisted fields (no package contents, raw manifests, descriptions,
+  account, billing or session data) and redact credentials, tokens, cookies,
+  auth headers, passwords, webhook secrets, e-mails and env-style secrets
+  before anything leaves the process; model output is redacted again.
+  Fixtures in `tests/phase8/ai-security.test.ts` assert on the prompts the
+  provider mock received.
+- **Prompt injection.** Extension source, manifests, report text, console
+  output and URLs are untrusted; they only appear inside a delimited data
+  block, the system rules forbid following instructions found there, and
+  validation ignores anything the model "decides" outside the schema
+  (invented evidence is dropped; leaked-looking strings are redacted).
+- **Secrets.** `AI_API_KEY` is read from the environment, used only in the
+  provider adapter's `Authorization` header, absent from `describeConfig()`,
+  logs, the database and the client bundle (asserted by tests). Production
+  requires https for `AI_BASE_URL`, rejects the fake provider and never falls
+  back to it.
+- **Abuse limits.** Per-user AI rate limit, global and per-user concurrency,
+  request/context/output/response size caps, plan entitlement and period
+  quota (charged only for validated answers), bounded question length and a
+  scoped Q&A that answers only about the selected report.
+- **Retention.** Only validated results with provider/model metadata are
+  stored (`ai_results`), for `AI_RESULT_RETENTION_DAYS`, per user, deleted
+  with the account. Prompts and raw responses are not persisted; logs carry
+  aggregate metadata only.
+
 ## Logging
 
 Structured JSON logs (`lib/observability/logger.ts`) include timestamps,

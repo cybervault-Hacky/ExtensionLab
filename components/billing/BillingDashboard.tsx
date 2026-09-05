@@ -232,6 +232,7 @@ export function BillingDashboard() {
         <div className="mt-4 grid grid-cols-1 gap-5 sm:grid-cols-2">
           <UsageBar label="Analyses" bucket={state.usage.analyses} />
           <UsageBar label="Automated test runs" bucket={state.usage.testRuns} />
+          {state.usage.aiRequests && state.plan.features.aiEnabled ? <UsageBar label="AI assistance requests" bucket={state.usage.aiRequests} /> : null}
         </div>
         <p className="mt-4 text-xs text-[var(--text-secondary)]">
           Reserved units belong to runs that are queued or in progress. Invalid uploads never count; runs that fail before the browser starts are refunded automatically.

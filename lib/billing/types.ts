@@ -26,6 +26,8 @@ export interface PlanFeatures {
   advancedDiagnostics: boolean;
   /** Automated test jobs are queued ahead of standard jobs. */
   priorityExecution: boolean;
+  /** Phase 8: AI assistance (explanations, summaries, suggestions) may be requested. */
+  aiEnabled: boolean;
 }
 
 export interface PlanLimits {
@@ -33,6 +35,8 @@ export interface PlanLimits {
   analysisLimit: number;
   /** Automated test runs per billing period. */
   testRunLimit: number;
+  /** Phase 8: AI assistance requests per billing period (0 when AI is not included). */
+  aiRequestLimit: number;
   /** Largest accepted extension package in bytes (never above the Phase 1 hard cap). */
   maxExtensionSize: number;
   /** Queued + running automated test runs at the same time. */

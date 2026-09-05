@@ -176,7 +176,9 @@ function countOpenReservationsInPeriod(userId: string, kind: UsageKind, period: 
 }
 
 export function limitFor(plan: Plan, kind: UsageKind): number {
-  return kind === "analysis" ? plan.analysisLimit : plan.testRunLimit;
+  if (kind === "analysis") return plan.analysisLimit;
+  if (kind === "ai_request") return plan.aiEnabled ? plan.aiRequestLimit : 0;
+  return plan.testRunLimit;
 }
 
 /** Usage for `kind` in the current period, including open reservations. */
@@ -213,6 +215,25 @@ export function canAnalyze(userId: string, now = Date.now()): EntitlementResult 
 
 export function canRunTests(userId: string, now = Date.now()): EntitlementResult {
   return quotaCheck(userId, "test_run", now);
+}
+
+/**
+ * Phase 8: AI assistance. A plan without AI is a *plan* denial (402, upgrade
+ * path); a plan with AI whose allowance is spent is a *quota* denial (429,
+ * resets with the billing period). Both are decided here, never in routes or
+ * components.
+ */
+export function canUseAI(userId: string, now = Date.now()): EntitlementResult {
+  const plan = getUserPlan(userId);
+  if (!plan.aiEnabled || plan.aiRequestLimit <= 0) {
+    return {
+      allowed: false,
+      reason: "plan",
+      requiredPlan: firstPlanWith((p) => p.aiEnabled && p.aiRequestLimit > 0, plan),
+      message: "AI assistance is not included in your plan.",
+    };
+  }
+  return quotaCheck(userId, "ai_request", now);
 }
 
 function quotaCheck(userId: string, kind: UsageKind, now: number): EntitlementResult {
@@ -300,7 +321,7 @@ function firstPlanWith(predicate: (plan: Plan) => boolean, current: Plan): PlanI
 }
 
 /** Quota limits for a plan id (used when reserving inside a transaction). */
-export function planLimits(planId: PlanId): { analysis: number; test_run: number } {
+export function planLimits(planId: PlanId): { analysis: number; test_run: number; ai_request: number } {
   const plan = getPlan(planId);
-  return { analysis: plan.analysisLimit, test_run: plan.testRunLimit };
+  return { analysis: plan.analysisLimit, test_run: plan.testRunLimit, ai_request: plan.aiEnabled ? plan.aiRequestLimit : 0 };
 }

@@ -15,6 +15,7 @@ import { getRetentionConfig } from "@/lib/retention/config";
 import { getRetentionForUser } from "@/lib/billing/entitlements";
 import { listPlans } from "@/lib/billing/config";
 import { deleteOldBillingEvents, deleteOldCheckouts, expireStaleCheckouts } from "@/lib/db/repositories/billing";
+import { deleteExpiredAIResults } from "@/lib/db/repositories/ai";
 import { logger } from "@/lib/observability/logger";
 import type { ArtifactCleanupPayload } from "./types";
 
@@ -32,6 +33,7 @@ export interface CleanupReport {
   reservationsReleased: number;
   staleCheckoutsExpired: number;
   billingEventsDeleted: number;
+  aiResultsDeleted: number;
 }
 
 /**
@@ -58,6 +60,7 @@ export async function runCleanup(payload: ArtifactCleanupPayload = {}): Promise<
     reservationsReleased: 0,
     staleCheckoutsExpired: 0,
     billingEventsDeleted: 0,
+    aiResultsDeleted: 0,
   };
 
   if (scope === "all" || scope === "artifacts") {
@@ -147,6 +150,13 @@ export async function runCleanup(payload: ArtifactCleanupPayload = {}): Promise<
     });
   }
 
+  if (scope === "all" || scope === "ai") {
+    await step("ai", async () => {
+      // Stored AI results expire after AI_RESULT_RETENTION_DAYS (set per row when written).
+      report.aiResultsDeleted = deleteExpiredAIResults(now);
+    });
+  }
+
   logger.info("cleanup.completed", { ...flatten(report) });
   return report;
 }
@@ -170,5 +180,6 @@ function flatten(report: CleanupReport): Record<string, unknown> {
     finishedJobsDeleted: report.finishedJobsDeleted,
     staleRunsFinalized: report.staleRunsFinalized,
     reservationsReleased: report.reservationsReleased,
+    aiResultsDeleted: report.aiResultsDeleted,
   };
 }

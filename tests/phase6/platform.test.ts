@@ -225,6 +225,7 @@ describe("health and readiness", () => {
     expect(report.checks.sandbox.reason).toBe("disabled");
     expect(report.capabilities.staticAnalysis).toBe(true);
     expect(report.capabilities.automatedTests).toBe(false);
+    expect(typeof report.capabilities.aiAssistance).toBe("boolean");
     expect(report.status).toBe("degraded");
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain(harness.dir);

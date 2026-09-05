@@ -4,6 +4,7 @@ import { summarizeLiveWorkers } from "@/lib/db/repositories/jobs";
 import { getStorage } from "@/lib/storage/storage";
 import { getConfig } from "@/lib/config/env";
 import { probeSandboxEnvironment } from "@/lib/runtime/availability";
+import { isAIEnabled } from "@/lib/ai/provider";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -20,6 +21,8 @@ export interface ReadinessReport {
   capabilities: {
     staticAnalysis: boolean;
     automatedTests: boolean;
+    /** Phase 8: an AI provider is configured (never reveals which key/model). */
+    aiAssistance: boolean;
   };
   time: string;
 }
@@ -106,6 +109,7 @@ export async function collectReadiness(): Promise<ReadinessReport> {
     capabilities: {
       staticAnalysis: databaseOk,
       automatedTests: databaseOk && storageOk && sandboxAvailable && workerStatus !== "unavailable",
+      aiAssistance: databaseOk && isAIEnabled(),
     },
     time: new Date().toISOString(),
   };

@@ -102,6 +102,7 @@ with counters:
 | Auth | expired reset tokens, expired sessions, expired/revoked shares | `RESET_TOKEN_RETENTION_DAYS`, `SESSION_RETENTION_DAYS`, `SHARE_RETENTION_DAYS` |
 | Jobs | queued jobs never run → `expired`; finished jobs deleted; stale active runs → `INFRASTRUCTURE_ERROR`; dangling reservations released | `STALE_JOB_DAYS`, `JOB_RETENTION_DAYS`, `STALE_RUN_MINUTES` |
 | Billing | open checkout sessions older than 24 h → `expired`; old checkout rows deleted; processed `billing_events` older than 90 days deleted (subscriptions are never deleted) | `JOB_RETENTION_DAYS` (checkout rows) |
+| AI | stored AI results past `expires_at` (Phase 8) | `AI_RESULT_RETENTION_DAYS` |
 
 Artifact and package retention are **per plan** since Phase 7
 (`PLAN_<PLAN>_ARTIFACT_RETENTION_DAYS` / `PLAN_<PLAN>_PACKAGE_RETENTION_DAYS`);
@@ -110,7 +111,7 @@ the Free plan. A downgraded user's data ages out under Free retention from the
 next cleanup on.
 
 Run it on demand on the worker host if needed (optionally scoped to
-`artifacts`, `packages`, `auth`, `jobs` or `billing`):
+`artifacts`, `packages`, `auth`, `jobs`, `billing` or `ai`):
 
 ```bash
 npm run cleanup
@@ -204,6 +205,29 @@ Runbook material lives in [BILLING.md](BILLING.md); the short version:
 - **Disabling billing:** `BILLING_PROVIDER=disabled` keeps all users on Free
   and hides purchase actions; existing local subscriptions are ignored (not
   deleted), and account deletion proceeds with a warning.
+
+## AI assistance (Phase 8)
+
+Full reference in [AI.md](AI.md); operational summary:
+
+- **Health:** `/api/ready` → `capabilities.aiAssistance` and `/api/me` →
+  `ai.available` tell you whether a provider is configured. `ai.request`
+  log events and `ai.*` metrics (tagged `feature`, `provider`, `result`)
+  show volume, latency, token usage and the failure mix.
+- **Provider incidents:** timeouts and 5xx from the provider surface to users
+  as "AI analysis is temporarily unavailable." with a reference id; nothing
+  else degrades. Raise `AI_TIMEOUT` or lower `AI_MAX_CONCURRENCY` if the
+  provider throttles; set `AI_PROVIDER=disabled` to switch the feature off
+  without a deploy of code.
+- **Cost control:** `AI_MAX_CONTEXT_BYTES`, `AI_MAX_OUTPUT_TOKENS`,
+  `RATE_LIMIT_AI_PER_MIN`, the plan allowances and result reuse
+  (`AI_RESULT_RETENTION_DAYS`) bound spend; `ai.tokens_input` /
+  `ai.tokens_output` metrics give the actual usage.
+- **Key rotation:** replace `AI_API_KEY` and restart the web process. The key
+  is never written anywhere else.
+- **Data requests:** stored AI results are per user (`ai_results`), deleted
+  by retention and by account deletion; prompts and raw responses are not
+  stored, so there is nothing else to export or purge.
 
 ## Troubleshooting
 

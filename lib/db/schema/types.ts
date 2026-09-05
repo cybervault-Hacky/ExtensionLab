@@ -264,3 +264,22 @@ export interface CheckoutSessionRow {
   created_at: number;
   updated_at: number;
 }
+
+/** Phase 8: validated AI result linked to the resource it explains. */
+export interface AIResultRow {
+  id: string;
+  user_id: string;
+  feature: string;
+  resource_kind: string;
+  resource_id: string;
+  target_id: string | null;
+  provider: string;
+  model: string;
+  context_hash: string;
+  result_json: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  duration_ms: number;
+  created_at: number;
+  expires_at: number;
+}

@@ -8,12 +8,17 @@ ZIP package and inspecting it locally in the browser. Phase 6 turned the
 project into a production-deployable service: durable package storage, a
 persistent background job queue and worker, real Docker execution, validated
 configuration, e-mail delivery, structured logging, health/readiness probes,
-artifact retention and hardened container images. Phase 7 (current) makes it
-a commercial SaaS: Free / Pro / Business plans, hosted checkout, provider
+artifact retention and hardened container images. Phase 7 makes it a
+commercial SaaS: Free / Pro / Business plans, hosted checkout, provider
 subscriptions, webhook-driven entitlements, per-period usage limits, billing
-portal and invoices — with billing fully decoupled from the product. See
-[Phase 6](#phase-6-production-infrastructure--commercial-readiness),
-[Phase 7](#phase-7-plans-billing--entitlements) and `docs/`.
+portal and invoices — with billing fully decoupled from the product. Phase 8
+(current) adds an optional, explainable AI assistance layer: on-demand
+explanations of findings, test failures and runtime errors, report summaries,
+validated test suggestions and scoped questions about a report — always
+labelled as AI interpretation next to the deterministic, verified results.
+See [Phase 6](#phase-6-production-infrastructure--commercial-readiness),
+[Phase 7](#phase-7-plans-billing--entitlements),
+[Phase 8](#phase-8-ai-assistance) and `docs/`.
 
 **Phase 1 does not execute extensions.** It performs:
 
@@ -126,7 +131,14 @@ duplicate and tampered webhooks, cancel / reactivate / expiry, payment
 failure and recovery, billing-period usage reset, invoice isolation, provider
 failure handling, account deletion with an active subscription, the Stripe
 adapter against a mocked API, product-API 429/402 contracts, the quota race,
-plan-aware concurrency/priority, share gating and client-bundle hygiene.
+plan-aware concurrency/priority, share gating and client-bundle hygiene; and,
+for Phase 8 (`tests/phase8/`): the OpenAI-compatible adapter against a mocked
+`fetch`, every fake-provider failure scenario through the real service,
+redaction and prompt-injection fixtures asserted on the prompts the provider
+mock received, context allowlisting/minimization, strict output validation
+and evidence filtering, test-suggestion safety, plan/quota/ownership/share
+rules on all six AI routes, retention, deletion and bundle hygiene. No test
+calls a real AI provider.
 
 Phase 1 coverage:
 
@@ -290,12 +302,16 @@ pull requests it will:
   persistent job queue and worker, real Docker execution, configuration
   validation, e-mail delivery, structured logging, health/readiness, artifact
   retention, hardened images and a real-Docker E2E suite.
-- **Phase 7 (current):** Plans, billing and entitlements — Free/Pro/Business
+- **Phase 7 (implemented):** Plans, billing and entitlements — Free/Pro/Business
   catalog, provider-agnostic checkout and subscriptions, signed webhooks,
   server-side entitlement service, billing-period usage limits, portal,
   invoices, paywall UX and account-deletion cancellation.
-- **Later phases (planned):** Team collaboration, cloud managed history, and
-  AI-assisted analysis.
+- **Phase 8 (current):** AI assistance — provider abstraction with one
+  OpenAI-compatible adapter and a deterministic fake, redacted and
+  allowlisted evidence contexts, strict output validation with evidence
+  links, validated test suggestions, plan-gated quotas and an on-demand UI
+  that keeps AI interpretation visibly separate from verified results.
+- **Later phases (planned):** Team collaboration and cloud managed history.
 
 ## Phase 4: Automated Testing & Runtime Diagnostics
 
@@ -722,6 +738,54 @@ Free → pricing page → hosted checkout → provider subscription → signed w
 - `docs/PLANS.md` — plan catalog, entitlement API and HTTP contract.
 - `docs/SECURITY.md`, `docs/DEPLOYMENT.md`, `docs/OPERATIONS.md`,
   `docs/ARCHITECTURE.md` — updated for Phase 7.
+
+## Phase 8: AI Assistance
+
+Phase 8 layers an assistant over the existing platform without changing how
+analysis, sandboxes, tests, ownership or billing work.
+
+- **Deterministic first.** Everything ExtensionLab *verifies* — scores,
+  findings, permissions, test outcomes, diagnostics — is still produced by the
+  analyzer, the sandbox and the test engine and carries a "Verified by
+  ExtensionLab" badge. AI panels are additional, labelled "AI interpretation"
+  or "AI-assisted", show a confidence level (high / medium / low) and the
+  disclaimer *"AI-generated guidance is based on the available ExtensionLab
+  evidence. Verify recommendations before applying changes."*
+- **Features** (all on demand, never on page load): *Explain with AI* on
+  findings and diagnostics, *Analyze failure* on failed tests, *Analyze
+  runtime errors* on a run, *Generate AI summary*, *Suggest tests* and *Ask
+  about this report* on the report page. Every answer links to real finding /
+  test / file / event / report-section ids; references the model invents are
+  discarded.
+- **Safety.** Contexts contain only allowlisted, size-bounded, redacted
+  evidence (no package contents, raw manifests, account or billing data).
+  Untrusted extension/report text is confined to a delimited data block under
+  fixed system rules; output must be a single JSON object matching a strict
+  schema and is redacted again. Test suggestions are validated against the
+  Phase 4 action/assertion/selector/URL allowlists and can only be run through
+  the normal test API. The model has no tools and no execution path.
+- **Access and limits.** `POST /api/ai/{finding,test-failure,runtime-error,
+  report-summary,suggest-tests,report-question}` require a session, pass the
+  same-origin check, load resources through the owner-scoped repositories,
+  and never accept share tokens. Plans gate the feature (`canUseAI`: Free not
+  included, Pro 100, Business 500 requests per period, configurable), quota is
+  charged only for validated answers, and per-user rate limits, concurrency
+  caps and body/context/output size limits bound cost and abuse.
+- **Providers.** `AI_PROVIDER=openai` with `AI_API_KEY` (any OpenAI-compatible
+  `AI_BASE_URL`), `fake` for development/tests (deterministic, offline,
+  scripted failures), or `disabled` (production default) — the app runs
+  unchanged and shows "AI assistance is currently unavailable.". Production
+  rejects the fake provider and never falls back to it.
+- **Data.** Validated results are stored per user for
+  `AI_RESULT_RETENTION_DAYS` (reused as "Previously generated" for identical
+  evidence, removed by cleanup and account deletion); prompts and raw
+  responses are not stored; logs and metrics carry aggregate metadata only.
+
+Documentation: `docs/AI.md` (architecture, provider abstraction,
+configuration, features, context building, redaction, quotas, rate limits,
+injection defense, fake provider, testing, production setup, privacy, failure
+behaviour); `docs/SECURITY.md`, `docs/DEPLOYMENT.md`, `docs/PLANS.md`,
+`docs/OPERATIONS.md` and `docs/ARCHITECTURE.md` are updated for Phase 8.
 
 ## License
 

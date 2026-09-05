@@ -17,6 +17,9 @@ import { Card } from "@/components/ui/Card";
 import { exportTestResults, copySummary } from "@/lib/testing/diagnostics";
 import { runHasExecutedTests, runOutcomeLabel } from "@/lib/testing/status-labels";
 import type { DiagnosticFinding, TestResult, TestScore } from "@/lib/testing/types";
+import { AnalyzeRuntimeErrors, AnalyzeTestFailure } from "@/components/ai/AIFeatures";
+import { AIBadge, VerifiedBadge, evidenceAnchor } from "@/components/ai/AIPanel";
+import type { AIEvidenceRef } from "@/components/ai/types";
 
 interface PersistedRun {
   run: {
@@ -57,6 +60,33 @@ export function PersistentTestRunView({ runId }: { runId: string }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [createdId, setCreatedId] = useState<string | null>(null);
+  const [aiAvailable, setAiAvailable] = useState<boolean | null>(null);
+
+  // Deployment-level AI availability only; no AI request happens on load.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/me")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: { ai?: { available?: boolean } } | null) => {
+        if (!cancelled) setAiAvailable(Boolean(payload?.ai?.available));
+      })
+      .catch(() => {
+        if (!cancelled) setAiAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const jumpToEvidence = useCallback((ref: AIEvidenceRef) => {
+    if (ref.kind === "test") setExpanded(ref.id);
+    const anchor = evidenceAnchor(ref);
+    if (!anchor) return;
+    requestAnimationFrame(() => {
+      const element = document.getElementById(anchor);
+      if (element) element.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -243,7 +273,7 @@ export function PersistentTestRunView({ runId }: { runId: string }) {
             <p className="p-6 text-center text-sm text-[var(--text-secondary)]">No matching tests.</p>
           ) : null}
           {filtered.map((result) => (
-            <div key={result.testId}>
+            <div key={result.testId} id={evidenceAnchor({ kind: "test", id: result.testId, label: result.name }) ?? undefined}>
               <button
                 type="button"
                 onClick={() => setExpanded(expanded === result.testId ? null : result.testId)}
@@ -283,6 +313,15 @@ export function PersistentTestRunView({ runId }: { runId: string }) {
                       </ul>
                     </div>
                   ) : null}
+                  {aiAvailable !== false && ["failed", "error", "timeout", "warning"].includes(result.status) ? (
+                    <div className="mt-4 border-t border-[var(--border)] pt-3">
+                      <div className="mb-2 flex items-center gap-2">
+                        <AIBadge>AI interpretation</AIBadge>
+                        <span className="text-xs text-[var(--text-secondary)]">Deterministic results above are unaffected.</span>
+                      </div>
+                      <AnalyzeTestFailure runId={runId} testId={result.testId} onJump={jumpToEvidence} />
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -291,22 +330,34 @@ export function PersistentTestRunView({ runId }: { runId: string }) {
       </div>
 
       <Card>
-        <div className="flex items-center gap-2">
-          <FlaskConical className="h-5 w-5 text-[var(--text-secondary)]" aria-hidden="true" />
-          <h2 className="text-base font-semibold tracking-tight">Diagnostics</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <FlaskConical className="h-5 w-5 text-[var(--text-secondary)]" aria-hidden="true" />
+            <h2 className="text-base font-semibold tracking-tight">Diagnostics</h2>
+          </div>
+          <VerifiedBadge />
         </div>
         {data.diagnostics.length === 0 ? (
           <p className="mt-3 text-sm text-[var(--text-secondary)]">No diagnostic findings.</p>
         ) : (
           <div className="mt-4 space-y-3">
             {data.diagnostics.map((finding) => (
-              <div key={finding.id} className="rounded-xl border border-[var(--border)] p-3">
+              <div key={finding.id} id={evidenceAnchor({ kind: "diagnostic", id: finding.id, label: finding.title }) ?? undefined} className="rounded-xl border border-[var(--border)] p-3">
                 <p className="text-sm font-medium">{finding.title}</p>
                 <p className="mt-1 text-sm text-[var(--text-secondary)]">{finding.description}</p>
               </div>
             ))}
           </div>
         )}
+        {aiAvailable !== false && executed && (data.run.failed > 0 || data.run.error > 0 || data.run.timeout > 0 || data.run.warnings > 0) ? (
+          <div className="mt-4 border-t border-[var(--border)] pt-4">
+            <div className="mb-2 flex items-center gap-2">
+              <AIBadge>AI interpretation</AIBadge>
+              <span className="text-xs text-[var(--text-secondary)]">Optional analysis of captured runtime errors and failed requests.</span>
+            </div>
+            <AnalyzeRuntimeErrors runId={runId} onJump={jumpToEvidence} />
+          </div>
+        ) : null}
       </Card>
     </div>
   );

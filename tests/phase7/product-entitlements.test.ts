@@ -208,7 +208,7 @@ describe("product APIs enforce entitlements server-side", () => {
 describe("secrets never reach the client bundle or the repository", () => {
   it("client components and public types do not import server billing modules or reference secret env names", () => {
     const clientDirs = ["components", "app"];
-    const forbidden = [/BILLING_SECRET_KEY/, /BILLING_WEBHOOK_SECRET/, /sk_live_/, /whsec_/];
+    const forbidden = [/BILLING_SECRET_KEY/, /BILLING_WEBHOOK_SECRET/, /sk_live_/, /whsec_/, /AI_API_KEY/];
     const offenders: string[] = [];
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir)) {
@@ -222,6 +222,7 @@ describe("secrets never reach the client bundle or the repository", () => {
         const source = readFileSync(full, "utf8");
         if (!source.startsWith('"use client"')) continue;
         if (/from "@\/lib\/billing\/(provider|providers|billing-service|webhooks|config|entitlements)"/.test(source)) offenders.push(`${full}: imports server billing module`);
+        if (/from "@\/lib\/ai\/(?!types")/.test(source)) offenders.push(`${full}: imports server AI module`);
         for (const pattern of forbidden) if (pattern.test(source)) offenders.push(`${full}: ${pattern}`);
       }
     };

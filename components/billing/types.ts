@@ -31,12 +31,14 @@ export interface PlanView {
     historyRetentionDays: number;
     artifactRetentionDays: number;
     packageRetentionDays: number;
+    aiRequestLimit: number;
   };
   features: {
     sharingEnabled: boolean;
     shareMaxExpiryHours: number;
     advancedDiagnostics: boolean;
     priorityExecution: boolean;
+    aiEnabled: boolean;
   };
 }
 
@@ -70,6 +72,7 @@ export interface BillingStateView {
     period: { start: number; end: number; source: "calendar" | "subscription" };
     analyses: UsageBucket;
     testRuns: UsageBucket;
+    aiRequests?: UsageBucket;
   };
   plans: PlanView[];
 }
@@ -100,7 +103,7 @@ export interface ApiErrorPayload {
     requestId?: string;
     details?: {
       reason: "quota" | "plan" | "size";
-      kind?: "analysis" | "test_run";
+      kind?: "analysis" | "test_run" | "ai_request";
       currentUsage?: number;
       limit?: number;
       resetAt?: number;

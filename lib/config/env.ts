@@ -15,6 +15,7 @@ export type AppEnv = "development" | "test" | "production";
 export type StorageProviderName = "local";
 export type EmailProviderName = "console" | "file" | "http" | "noop";
 type BillingProviderName = "stripe" | "fake" | "disabled";
+export type AIProviderName = "openai" | "fake" | "disabled";
 export type WorkerMode = "embedded" | "external" | "disabled";
 
 export interface AppConfig {
@@ -75,6 +76,30 @@ export interface AppConfig {
     /** Days a past_due subscription keeps paid entitlements while the provider retries payment. */
     pastDueGraceDays: number;
   };
+  /**
+   * Phase 8 AI assistance (see docs/AI.md). The API key is read here and
+   * handed to the provider adapter only; describeConfig() never exposes it.
+   */
+  ai: {
+    provider: AIProviderName;
+    apiKey: string | null;
+    model: string;
+    /** OpenAI-compatible API base URL (no trailing slash). */
+    baseUrl: string;
+    timeoutMs: number;
+    /** Largest accepted AI request body (bytes). */
+    maxRequestBytes: number;
+    /** Largest sanitized context sent to the provider (bytes). */
+    maxContextBytes: number;
+    maxOutputTokens: number;
+    /** Largest raw provider response accepted (bytes). */
+    maxResponseBytes: number;
+    /** Provider calls in flight across the process / per user. */
+    maxConcurrency: number;
+    maxConcurrencyPerUser: number;
+    /** Days a stored AI result is kept (0 disables persistence). */
+    resultRetentionDays: number;
+  };
   /** Requests per minute per client for the sensitive endpoints. */
   rateLimits: {
     login: number;
@@ -93,6 +118,8 @@ export interface AppConfig {
     billingPortal: number;
     billingChange: number;
     billingWebhook: number;
+    /** Phase 8: AI assistance calls per user per minute (separate from app limits). */
+    aiRequest: number;
   };
 }
 
@@ -313,6 +340,37 @@ function buildConfig(): AppConfig {
     problems,
   );
 
+  // AI assistance. Like billing, the fake provider is for development/tests
+  // only and production defaults to "disabled" (the app runs without AI).
+  const aiProvider = oneOf("AI_PROVIDER", ["openai", "fake", "disabled"] as const, isProduction ? "disabled" : "fake", problems);
+  const aiApiKey = str("AI_API_KEY") ?? null;
+  const aiBaseUrlRaw = str("AI_BASE_URL") ?? "https://api.openai.com/v1";
+  const aiBaseUrl = aiBaseUrlRaw.replace(/\/+$/, "");
+  if (aiProvider === "openai") {
+    if (!aiApiKey) problems.push("AI_API_KEY is required when AI_PROVIDER=openai");
+    try {
+      const parsed = new URL(aiBaseUrl);
+      if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && !isProduction)) {
+        problems.push("AI_BASE_URL must use https");
+      }
+      if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+        problems.push("AI_BASE_URL must not contain credentials, query strings or fragments");
+      }
+    } catch {
+      problems.push("AI_BASE_URL must be an absolute URL");
+    }
+  }
+  if (aiProvider === "fake" && isProduction) {
+    problems.push("AI_PROVIDER=fake is not allowed in production");
+  }
+  const aiModel = str("AI_MODEL") ?? "gpt-4o-mini";
+  if (!/^[A-Za-z0-9._:\/-]{1,128}$/.test(aiModel)) problems.push("AI_MODEL contains unsupported characters");
+  // AI_TIMEOUT is expressed in seconds to match SANDBOX_TIMEOUT; AI_TIMEOUT_MS is accepted too.
+  const aiTimeoutMs =
+    str("AI_TIMEOUT_MS") !== undefined
+      ? num("AI_TIMEOUT_MS", 20_000, problems, { min: 1_000, max: 120_000 })
+      : num("AI_TIMEOUT", 20, problems, { min: 1, max: 120 }) * 1000;
+
   const config: AppConfig = {
     appEnv,
     appUrl: appUrl.replace(/\/$/, ""),
@@ -363,6 +421,20 @@ function buildConfig(): AppConfig {
       deletionPolicy,
       pastDueGraceDays: num("BILLING_PAST_DUE_GRACE_DAYS", 7, problems, { min: 0, max: 60 }),
     },
+    ai: {
+      provider: aiProvider,
+      apiKey: aiProvider === "openai" ? aiApiKey : null,
+      model: aiModel,
+      baseUrl: aiBaseUrl,
+      timeoutMs: aiTimeoutMs,
+      maxRequestBytes: num("AI_MAX_REQUEST_BYTES", 16 * 1024, problems, { min: 1024, max: 1024 * 1024 }),
+      maxContextBytes: num("AI_MAX_CONTEXT_BYTES", 24 * 1024, problems, { min: 2048, max: 512 * 1024 }),
+      maxOutputTokens: num("AI_MAX_OUTPUT_TOKENS", 1200, problems, { min: 128, max: 8192 }),
+      maxResponseBytes: num("AI_MAX_RESPONSE_BYTES", 64 * 1024, problems, { min: 4096, max: 4 * 1024 * 1024 }),
+      maxConcurrency: num("AI_MAX_CONCURRENCY", 4, problems, { min: 1, max: 64 }),
+      maxConcurrencyPerUser: num("AI_MAX_CONCURRENCY_PER_USER", 1, problems, { min: 1, max: 8 }),
+      resultRetentionDays: num("AI_RESULT_RETENTION_DAYS", 30, problems, { min: 0, max: 3650 }),
+    },
     rateLimits: {
       login: num("RATE_LIMIT_LOGIN_PER_MIN", 30, problems, { min: 1 }),
       signup: num("RATE_LIMIT_SIGNUP_PER_MIN", 30, problems, { min: 1 }),
@@ -381,6 +453,7 @@ function buildConfig(): AppConfig {
       billingChange: num("RATE_LIMIT_BILLING_CHANGE_PER_MIN", 10, problems, { min: 1 }),
       // Keyed by source address; generous so provider retries are never dropped.
       billingWebhook: num("RATE_LIMIT_BILLING_WEBHOOK_PER_MIN", 600, problems, { min: 1 }),
+      aiRequest: num("RATE_LIMIT_AI_PER_MIN", 10, problems, { min: 1 }),
     },
   };
 
@@ -435,6 +508,12 @@ export function describeConfig(config: AppConfig = getConfig()): Record<string, 
       proConfigured: Boolean(config.billing.priceIds.pro),
       businessConfigured: Boolean(config.billing.priceIds.business),
       deletionPolicy: config.billing.deletionPolicy,
+    },
+    ai: {
+      provider: config.ai.provider,
+      model: config.ai.provider === "disabled" ? null : config.ai.model,
+      configured: config.ai.provider === "fake" || (config.ai.provider === "openai" && Boolean(config.ai.apiKey)),
+      timeoutSeconds: Math.round(config.ai.timeoutMs / 1000),
     },
   };
 }

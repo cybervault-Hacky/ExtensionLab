@@ -2,7 +2,7 @@ import { getDb, transaction } from "../client";
 import { generateDbId } from "../ids";
 import type { QuotaReservationRow } from "../schema/types";
 import { recordUsage, type UsageKind } from "./usage";
-import { canAnalyze, canRunTests, getQuotaUsage, type QuotaDenial } from "@/lib/billing/entitlements";
+import { canAnalyze, canRunTests, canUseAI, getQuotaUsage, type QuotaDenial } from "@/lib/billing/entitlements";
 
 /**
  * Atomic quota reservations.
@@ -65,7 +65,8 @@ export function reserveQuota(input: {
     // The entitlement check runs inside the writer transaction (BEGIN IMMEDIATE),
     // so two simultaneous requests for the last unit serialize here and only
     // one of them can insert a reservation.
-    const verdict = input.kind === "analysis" ? canAnalyze(input.userId) : canRunTests(input.userId);
+    const verdict =
+      input.kind === "analysis" ? canAnalyze(input.userId) : input.kind === "ai_request" ? canUseAI(input.userId) : canRunTests(input.userId);
     if (!verdict.allowed) {
       const snapshot = getQuotaSnapshot(input.userId, input.kind);
       throw new QuotaExceededError(input.kind, snapshot, verdict.reason === "quota" ? verdict.quota : null);

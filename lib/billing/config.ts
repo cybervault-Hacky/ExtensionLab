@@ -64,12 +64,14 @@ export interface PlanView {
     historyRetentionDays: number;
     artifactRetentionDays: number;
     packageRetentionDays: number;
+    aiRequestLimit: number;
   };
   features: {
     sharingEnabled: boolean;
     shareMaxExpiryHours: number;
     advancedDiagnostics: boolean;
     priorityExecution: boolean;
+    aiEnabled: boolean;
   };
 }
 
@@ -91,12 +93,14 @@ export function toPlanView(plan: Plan, formatted: string): PlanView {
       historyRetentionDays: plan.historyRetentionDays,
       artifactRetentionDays: plan.artifactRetentionDays,
       packageRetentionDays: plan.packageRetentionDays,
+      aiRequestLimit: plan.aiEnabled ? plan.aiRequestLimit : 0,
     },
     features: {
       sharingEnabled: plan.sharingEnabled,
       shareMaxExpiryHours: plan.shareMaxExpiryHours,
       advancedDiagnostics: plan.advancedDiagnostics,
       priorityExecution: plan.priorityExecution,
+      aiEnabled: plan.aiEnabled && plan.aiRequestLimit > 0,
     },
   };
 }

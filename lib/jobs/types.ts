@@ -38,7 +38,7 @@ export interface EmailPayload {
 }
 
 export interface ArtifactCleanupPayload {
-  scope?: "all" | "artifacts" | "packages" | "auth" | "jobs" | "billing";
+  scope?: "all" | "artifacts" | "packages" | "auth" | "jobs" | "billing" | "ai";
 }
 
 export interface ReportGenerationPayload {

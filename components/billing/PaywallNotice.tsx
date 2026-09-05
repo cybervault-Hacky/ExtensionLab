@@ -21,7 +21,7 @@ export interface PaywallInfo {
 export function paywallFromError(body: ApiErrorPayload | null): PaywallInfo | null {
   const error = body?.error;
   if (!error || !error.details) return null;
-  if (error.errorCode !== "QUOTA_EXCEEDED" && error.errorCode !== "PAYMENT_REQUIRED") return null;
+  if (error.errorCode !== "QUOTA_EXCEEDED" && error.errorCode !== "PAYMENT_REQUIRED" && error.errorCode !== "AI_QUOTA_EXCEEDED") return null;
   return {
     message: error.message ?? "Your plan limit has been reached.",
     referenceId: error.referenceId,

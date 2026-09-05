@@ -20,6 +20,7 @@ they cannot drift apart.
 | Report sharing | expiring links up to 7 days | permanent or expiring | permanent or expiring |
 | Advanced diagnostics (runtime logs, network evidence) | – | ✓ | ✓ |
 | Priority queue | – | – | ✓ |
+| AI assistance requests per period (Phase 8) | not included | 100 | 500 |
 
 "Period" is the calendar month for Free users and the **subscription billing
 period** (`currentPeriodStart` → `currentPeriodEnd`) for paid users; usage
@@ -44,7 +45,14 @@ PLAN_PRO_MAX_CONCURRENT_RUNS=2
 PLAN_PRO_HISTORY_RETENTION_DAYS=180
 PLAN_PRO_ARTIFACT_RETENTION_DAYS=30
 PLAN_PRO_PACKAGE_RETENTION_DAYS=60
+PLAN_PRO_AI_ENABLED=true
+PLAN_PRO_AI_LIMIT=100
 ```
+
+AI assistance is the one feature flag that *is* environment-configurable
+(`PLAN_<PLAN>_AI_ENABLED`, `PLAN_<PLAN>_AI_LIMIT`), because operators may
+enable a small Free allowance or disable AI for a plan without a release.
+Free defaults to `false` / `0`.
 
 The Phase 5 variables (`PLAN_ANALYSIS_LIMIT`, `PLAN_TEST_LIMIT`,
 `PLAN_MAX_EXTENSION_SIZE`, `PLAN_MAX_CONCURRENT_RUNS`,
@@ -79,6 +87,8 @@ interface Plan {
   shareMaxExpiryHours: number;   // 0 = permanent links allowed
   advancedDiagnostics: boolean;
   priorityExecution: boolean;
+  aiEnabled: boolean;            // Phase 8: AI assistance included
+  aiRequestLimit: number;        // AI requests per period (0 = none)
   highlights: string[];          // marketing bullets (derived, not authoritative)
 }
 ```
@@ -104,6 +114,7 @@ it **after** authenticating the user and **before** doing work:
 | `hasPriorityExecution(userId)` | job priority when enqueuing automated tests |
 | `getRetentionForUser(userId)` | artifact expiry, package cleanup, history |
 | `getQuotaUsage(userId, kind)` | quota snapshots, `/api/me`, billing dashboard |
+| `canUseAI(userId)` | every `POST /api/ai/*` route (plan gate) and `runAIFeature` (period quota, usage kind `ai_request`) |
 
 Results are `EntitlementResult` objects (`{ allowed: true }` or
 `{ allowed: false, reason: "quota" | "plan" | "size", requiredPlan, … }`) and
@@ -111,7 +122,7 @@ Results are `EntitlementResult` objects (`{ allowed: true }` or
 
 | Reason | Status | `errorCode` | `details` |
 | --- | --- | --- | --- |
-| quota | 429 | `QUOTA_EXCEEDED` | `kind, currentUsage, limit, resetAt, plan, requiredPlan, requiredPlanName` |
+| quota | 429 | `QUOTA_EXCEEDED` (`AI_QUOTA_EXCEEDED` for `ai_request`) | `kind, currentUsage, limit, resetAt, plan, requiredPlan, requiredPlanName` |
 | plan | 402 | `PAYMENT_REQUIRED` | `plan, requiredPlan, requiredPlanName` |
 | size | 413 | `PAYMENT_REQUIRED` | `maxExtensionSize, plan, requiredPlan, requiredPlanName` |
 

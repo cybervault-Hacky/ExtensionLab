@@ -11,7 +11,8 @@ import { PLAN_IDS, type Plan, type PlanId } from "./types";
  *   PLAN_<PLAN>_ANALYSIS_LIMIT, PLAN_<PLAN>_TEST_LIMIT,
  *   PLAN_<PLAN>_MAX_EXTENSION_SIZE, PLAN_<PLAN>_MAX_CONCURRENT_RUNS,
  *   PLAN_<PLAN>_HISTORY_RETENTION_DAYS, PLAN_<PLAN>_ARTIFACT_RETENTION_DAYS,
- *   PLAN_<PLAN>_PACKAGE_RETENTION_DAYS
+ *   PLAN_<PLAN>_PACKAGE_RETENTION_DAYS,
+ *   PLAN_<PLAN>_AI_ENABLED, PLAN_<PLAN>_AI_LIMIT (Phase 8 AI assistance)
  *
  * The Phase 5 variables (PLAN_ANALYSIS_LIMIT, PLAN_TEST_LIMIT,
  * PLAN_MAX_EXTENSION_SIZE, PLAN_MAX_CONCURRENT_RUNS,
@@ -47,6 +48,8 @@ const DEFAULTS: Record<PlanId, Omit<Plan, "price" | "purchasable">> = {
     shareMaxExpiryHours: 168,
     advancedDiagnostics: false,
     priorityExecution: false,
+    aiEnabled: false,
+    aiRequestLimit: 0,
     highlights: ["Static analysis and health score", "Automated tests in an isolated browser", "Reports with 7-day share links"],
   },
   pro: {
@@ -66,7 +69,9 @@ const DEFAULTS: Record<PlanId, Omit<Plan, "price" | "purchasable">> = {
     shareMaxExpiryHours: 0,
     advancedDiagnostics: true,
     priorityExecution: false,
-    highlights: ["Screenshots, runtime logs and network evidence", "Permanent share links", "Two runs at a time"],
+    aiEnabled: true,
+    aiRequestLimit: 100,
+    highlights: ["Screenshots, runtime logs and network evidence", "AI-assisted explanations and test suggestions", "Permanent share links"],
   },
   business: {
     id: "business",
@@ -85,7 +90,9 @@ const DEFAULTS: Record<PlanId, Omit<Plan, "price" | "purchasable">> = {
     shareMaxExpiryHours: 0,
     advancedDiagnostics: true,
     priorityExecution: true,
-    highlights: ["Priority queue for automated tests", "Four runs at a time", "One-year history"],
+    aiEnabled: true,
+    aiRequestLimit: 500,
+    highlights: ["Priority queue for automated tests", "Higher AI assistance allowance", "One-year history"],
   },
 };
 
@@ -162,6 +169,8 @@ function buildPlan(id: PlanId, env: NodeJS.ProcessEnv, pricing: PlanEnv, hardMax
     shareMaxExpiryHours: numFromEnv(env, [`${P}SHARE_MAX_EXPIRY_HOURS`], base.shareMaxExpiryHours),
     advancedDiagnostics: boolFromEnv(env, `${P}ADVANCED_DIAGNOSTICS`, base.advancedDiagnostics),
     priorityExecution: boolFromEnv(env, `${P}PRIORITY_EXECUTION`, base.priorityExecution),
+    aiEnabled: boolFromEnv(env, `${P}AI_ENABLED`, base.aiEnabled),
+    aiRequestLimit: numFromEnv(env, [`${P}AI_LIMIT`], base.aiRequestLimit),
     price: { amount: pricing.amount, currency: pricing.currency, interval: "month" },
     purchasable: id !== "free" && Boolean(pricing.priceId),
   };
@@ -197,14 +206,23 @@ export function orderedPlans(catalog: Record<PlanId, Plan>): Plan[] {
 }
 
 /** Smallest plan whose limit satisfies `required` for `kind`, or null when none does. */
+export type QuotaKind = "analysis" | "test_run" | "ai_request";
+
+/** The plan field that holds the per-period limit for a quota kind. */
+export function limitKeyFor(kind: QuotaKind): "analysisLimit" | "testRunLimit" | "aiRequestLimit" {
+  return kind === "analysis" ? "analysisLimit" : kind === "test_run" ? "testRunLimit" : "aiRequestLimit";
+}
+
 export function smallestPlanWithLimit(
   catalog: Record<PlanId, Plan>,
-  kind: "analysis" | "test_run",
+  kind: QuotaKind,
   currentPlan: PlanId,
 ): PlanId | null {
-  const key = kind === "analysis" ? "analysisLimit" : "testRunLimit";
+  const key = limitKeyFor(kind);
   const current = catalog[currentPlan];
-  const candidate = orderedPlans(catalog).find((plan) => plan.rank > current.rank && plan[key] > current[key]);
+  const candidate = orderedPlans(catalog).find(
+    (plan) => plan.rank > current.rank && plan[key] > current[key] && (kind !== "ai_request" || plan.aiEnabled),
+  );
   return candidate?.id ?? null;
 }
 
@@ -265,5 +283,10 @@ export function planComparisonRows(catalog: Record<PlanId, Plan>): PlanCompariso
       ),
     },
     { key: "priority", label: "Priority execution", values: val((p) => (p.priorityExecution ? "Included" : "Standard queue")) },
+    {
+      key: "ai",
+      label: "AI assistance requests per month",
+      values: val((p) => (p.aiEnabled && p.aiRequestLimit > 0 ? `${p.aiRequestLimit}` : "Not included")),
+    },
   ];
 }

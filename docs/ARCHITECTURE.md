@@ -157,6 +157,35 @@ request → session user → subscriptions row → resolveEffectivePlan()
 
 Details: [BILLING.md](BILLING.md), [PLANS.md](PLANS.md).
 
+## AI assistance (Phase 8)
+
+```
+POST /api/ai/* → session → AI rate limit → provider configured → canUseAI (plan)
+              → owner-scoped source (report / run / snapshot)
+              → buildContext (allowlist, redaction, byte budget, evidence index)
+              → cache lookup → reserve ai_request quota → concurrency slot
+              → prompt (rules + task + schema + <EXTENSIONLAB_DATA>) → AIProvider
+              → strict JSON validation + evidence filtering + output redaction
+              → consume reservation → ai_results → AIResponseEnvelope
+```
+
+- `lib/ai/service.ts` is the only code that calls a provider; routes are
+  declarations (`createAIRoute({ feature, parse })`) and components are
+  on-demand panels.
+- AI is downstream of every deterministic system and upstream of none: it
+  reads stored analysis/test/report data through the same `getOwned*`
+  repositories as the private APIs, produces data (never actions), and its
+  output is validated against the evidence it was given. Test suggestions
+  are re-validated by the Phase 4 engine when a user chooses to run them.
+- Providers implement `AIProvider` (`lib/ai/types.ts`): one OpenAI-compatible
+  adapter and a deterministic fake for development and tests. Production
+  configuration rejects the fake and defaults to `disabled`.
+- Usage rides on the Phase 6/7 reservation table (`ai_request`), plan
+  entitlements come from `canUseAI`, results live in `ai_results` with
+  retention and cascade deletion.
+
+Details: [AI.md](AI.md).
+
 ## Storage and artifacts
 
 - Keys: `extensions/<userId>/<32 hex>.zip`, `artifacts/<runId>/<32 hex>.<ext>`.
@@ -229,3 +258,8 @@ browser ──(cookies, CSRF origin check)──▶ web ──(SQLite, storage)�
 
 Uploaded code is never executed by web or worker; it is copied into a
 disposable container as data. See `docs/SECURITY.md`.
+
+The optional AI provider (Phase 8) sits outside the boundary as an untrusted
+HTTPS service: it receives redacted, allowlisted evidence and returns data
+that is validated before use. It has no path back into the sandbox, the
+database, the filesystem or the test engine.

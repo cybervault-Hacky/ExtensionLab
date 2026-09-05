@@ -2,7 +2,11 @@ import { getDb } from "../client";
 import { generateDbId } from "../ids";
 import type { UsageEventRow } from "../schema/types";
 
-export type UsageKind = "analysis" | "test_run";
+/**
+ * Metered usage kinds. `ai_request` (Phase 8) counts AI assistance calls; it
+ * shares the reservation/consume/release lifecycle of the other kinds.
+ */
+export type UsageKind = "analysis" | "test_run" | "ai_request";
 
 export function recordUsage(userId: string, kind: UsageKind, at: number = Date.now()): void {
   const db = getDb();

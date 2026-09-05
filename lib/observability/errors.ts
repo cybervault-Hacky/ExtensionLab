@@ -36,6 +36,17 @@ export const ERROR_CATALOG = {
   SUBSCRIPTION_STATE_INVALID: { status: 409, message: "This action is not possible in the subscription's current state.", retryable: false },
   WEBHOOK_SIGNATURE_INVALID: { status: 400, message: "The webhook signature could not be verified.", retryable: false },
   PAYMENT_REQUIRED: { status: 402, message: "This feature requires a paid plan.", retryable: false },
+  // Phase 8 AI assistance. Messages are the exact strings the UI shows; none
+  // of them reveal the provider, the model or any request/response content.
+  AI_NOT_CONFIGURED: { status: 503, message: "AI assistance is currently unavailable.", retryable: false },
+  AI_UNAVAILABLE: { status: 503, message: "AI analysis is temporarily unavailable.", retryable: true },
+  AI_PROVIDER_ERROR: { status: 502, message: "AI analysis is temporarily unavailable.", retryable: true },
+  AI_TIMEOUT: { status: 504, message: "AI analysis took too long. Please try again.", retryable: true },
+  AI_RATE_LIMITED: { status: 429, message: "Too many AI requests. Please wait a moment and try again.", retryable: true },
+  AI_QUOTA_EXCEEDED: { status: 429, message: "AI usage limit reached.", retryable: false },
+  AI_INVALID_OUTPUT: { status: 502, message: "The AI response could not be validated. Please try again.", retryable: true },
+  AI_CONTEXT_TOO_LARGE: { status: 413, message: "There is too much data for a single AI analysis.", retryable: false },
+  AI_UNAUTHORIZED_CONTEXT: { status: 404, message: "Resource not found.", retryable: false },
   INTERNAL: { status: 500, message: "The request could not be completed.", retryable: false },
 } as const;
 

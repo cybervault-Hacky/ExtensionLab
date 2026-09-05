@@ -22,12 +22,22 @@ describe("plan catalog", () => {
   it("is configuration driven: env overrides per plan and legacy PLAN_* names map to Free only", () => {
     const catalog = buildPlanCatalog({
       ...base,
-      env: { PLAN_TEST_LIMIT: "2", PLAN_PRO_TEST_LIMIT: "300", PLAN_BUSINESS_SHARING_ENABLED: "false" } as unknown as NodeJS.ProcessEnv,
+      env: { PLAN_TEST_LIMIT: "2", PLAN_PRO_TEST_LIMIT: "300", PLAN_BUSINESS_SHARING_ENABLED: "false", PLAN_FREE_AI_ENABLED: "true", PLAN_FREE_AI_LIMIT: "3", PLAN_PRO_AI_LIMIT: "250" } as unknown as NodeJS.ProcessEnv,
     });
     expect(catalog.free.testRunLimit).toBe(2);
     expect(catalog.pro.testRunLimit).toBe(300);
     expect(catalog.business.testRunLimit).toBe(500);
     expect(catalog.business.sharingEnabled).toBe(false);
+    // Phase 8: AI assistance is a plan entitlement with the same override scheme.
+    expect(catalog.free.aiEnabled).toBe(true);
+    expect(catalog.free.aiRequestLimit).toBe(3);
+    expect(catalog.pro.aiRequestLimit).toBe(250);
+    expect(catalog.business.aiEnabled).toBe(true);
+    const defaults = buildPlanCatalog(base);
+    expect(defaults.free.aiEnabled).toBe(false);
+    expect(defaults.free.aiRequestLimit).toBe(0);
+    expect(defaults.pro.aiRequestLimit).toBeGreaterThan(0);
+    expect(defaults.business.aiRequestLimit).toBeGreaterThan(defaults.pro.aiRequestLimit);
   });
 
   it("never lets a plan exceed the platform's hard extension size limit", () => {
@@ -51,6 +61,7 @@ describe("plan catalog", () => {
     const catalog = buildPlanCatalog(base);
     const rows = planComparisonRows(catalog);
     expect(rows.find((row) => row.key === "tests")?.values).toEqual({ free: "5", pro: "100", business: "500" });
+    expect(rows.find((row) => row.key === "ai")?.values).toEqual({ free: "Not included", pro: "100", business: "500" });
     expect(smallestPlanWithLimit(catalog, "test_run", "free")).toBe("pro");
     expect(smallestPlanWithLimit(catalog, "test_run", "business")).toBeNull();
     expect(isPaidPlanId("pro")).toBe(true);
