@@ -28,9 +28,13 @@ declare module "chrome-remote-interface" {
     };
     Network: {
       enable(): Promise<unknown>;
+      clearBrowserCookies(): Promise<unknown>;
     };
     Log: {
       enable(): Promise<unknown>;
+    };
+    Storage: {
+      clearDataForOrigin(input: { origin: string; storageTypes: string }): Promise<unknown>;
     };
     ServiceWorker: {
       enable(): Promise<unknown>;

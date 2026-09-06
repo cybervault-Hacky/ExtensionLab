@@ -233,7 +233,7 @@ async function handleTestAction(input: SafeTestActionInput): Promise<{ ok: boole
 }
 
 async function handleCommand(body: unknown): Promise<{ ok: boolean; status: string; message?: string; data?: Record<string, unknown> }> {
-  const parsed = body as { command?: string; payload?: { url?: string; width?: number; height?: number; action?: unknown; popupPath?: string; testUrl?: string } };
+  const parsed = body as { command?: string; payload?: { url?: string; width?: number; height?: number; action?: unknown; popupPath?: string; testUrl?: string; x?: number; y?: number; target?: string } };
   const command = parsed?.command;
   if (!command || !ALLOWED_ACTIONS.has(command)) {
     return { ok: false, status, message: "Unsupported command." };
@@ -339,6 +339,30 @@ async function handleCommand(body: unknown): Promise<{ ok: boolean; status: stri
     case "get-url": {
       const url = await browser.getPageUrl();
       return { ok: true, status, data: { url } };
+    }
+    case "inspect-at": {
+      // Phase 12: bounded element inspection. Coordinates are validated here
+      // AND inside the adapter; the inspection script is fixed, so no
+      // client-supplied code ever executes.
+      if (!browser.inspectAt) return unsupported("Element inspection");
+      const x = Math.round(Number(parsed?.payload?.x));
+      const y = Math.round(Number(parsed?.payload?.y));
+      const target = parsed?.payload?.target === "popup" ? "popup" : "page";
+      if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x > 4096 || y > 4096) {
+        return { ok: false, status, message: "Inspection coordinates are out of range." };
+      }
+      const result = await browser.inspectAt(x, y, target);
+      return { ok: result.ok, status, message: result.message, data: result.data };
+    }
+    case "restart-browser": {
+      if (!browser.restartBrowser) return unsupported("Browser restart");
+      const result = await browser.restartBrowser();
+      return { ok: result.ok, status, message: result.message, data: result.data };
+    }
+    case "clear-state": {
+      if (!browser.clearBrowserState) return unsupported("Browser state reset");
+      const result = await browser.clearBrowserState();
+      return { ok: result.ok, status, message: result.message };
     }
     case "reload":
       await browser.reload();

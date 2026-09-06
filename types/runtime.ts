@@ -50,7 +50,11 @@ export type SandboxAction =
   | "input"
   | "open-popup"
   | "close-popup"
-  | "get-url";
+  | "get-url"
+  // Phase 12 interactive commands (same allowlist model; no CDP passthrough).
+  | "inspect-at"
+  | "restart-browser"
+  | "clear-state";
 
 export interface RuntimeEvent {
   id: string;

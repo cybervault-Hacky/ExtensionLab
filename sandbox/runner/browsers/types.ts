@@ -93,6 +93,23 @@ export interface SandboxBrowser {
   closePopup?(): Promise<InteractiveCommandResult>;
   /** Restarts the browser (same profile, same package) = real extension reload. */
   restartExtension?(): Promise<InteractiveCommandResult>;
+  /**
+   * Phase 12: full browser restart — new process against the same on-disk,
+   * hash-verified package. Returns fresh extension-load evidence.
+   */
+  restartBrowser?(): Promise<InteractiveCommandResult>;
+  /**
+   * Phase 12: clears only this disposable browser's state (cookies, storage).
+   * Never touches anything outside the container.
+   */
+  clearBrowserState?(): Promise<InteractiveCommandResult>;
+  /**
+   * Phase 12: bounded element inspection at viewport coordinates. Runs a
+   * FIXED script (no client-supplied code) that returns only safe metadata:
+   * tag/id/classes/text preview/bounded attributes/visibility/rect, with
+   * password values redacted inside the container.
+   */
+  inspectAt?(x: number, y: number, target?: "page" | "popup"): Promise<InteractiveCommandResult>;
   capturePopupScreenshot?(): Promise<Uint8Array | null>;
   isPopupOpen?(): boolean;
   currentViewport?(): { width: number; height: number };

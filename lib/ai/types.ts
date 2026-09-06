@@ -146,7 +146,7 @@ export interface RunSummaryContext {
 /** Everything a prompt may reference. Built only by `lib/ai/context.ts`. */
 export interface AIContext {
   /** What the request is about; drives ownership and evidence validation. */
-  resource: { kind: "report" | "test_run" | "snapshot"; id: string };
+  resource: { kind: "report" | "test_run" | "snapshot" | "browser_session"; id: string };
   extension: ExtensionContext;
   scores: ScoreContext | null;
   findings: FindingContext[];

@@ -40,6 +40,8 @@ export const API_SCOPES = [
   "reports:read",
   "browser-matrix:read",
   "browser-matrix:write",
+  "browser-sessions:read",
+  "browser-sessions:write",
   "webhooks:read",
   "webhooks:write",
   "organization:read",

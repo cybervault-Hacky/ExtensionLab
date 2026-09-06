@@ -118,6 +118,15 @@ returns 404.
 | `GET /api/browser-sessions/{id}/console` / `…/network` | Bounded ring snapshots. |
 | `POST /api/browser-sessions/{id}/viewport` | Resize within deployment bounds. |
 | `POST /api/browser-sessions/{id}/keepalive` | Rate-limited activity touch (never extends `expiresAt`). |
+| `POST /api/browser-sessions/{id}/inspect` | Bounded element inspection at viewport coordinates (Phase 12). |
+| `POST /api/browser-sessions/{id}/restart` | Controlled browser restart of the same session (Phase 12). |
+| `POST /api/browser-sessions/{id}/clear-state` | Clear cookies/storage inside THIS disposable browser (Phase 12). |
+| `GET`/`POST /api/browser-sessions/{id}/evidence` | List / save evidence records referencing runtime data (Phase 12). |
+| `DELETE /api/browser-sessions/{id}/evidence/{evidenceId}` | Delete unattached evidence. |
+| `POST /api/browser-sessions/{id}/evidence/{evidenceId}/report` | Attach evidence to a report (creates one when omitted). |
+| `POST /api/browser-sessions/{id}/test-recipe` | Convert confirmed session actions into a Phase 4 test (Phase 12). |
+| `POST /api/browser-sessions/{id}/run-test` | Queue the standard automated suite for the bound package. |
+| `POST /api/browser-sessions/{id}/ai/explain` / `…/ai/summary` | Optional AI interpretation layer over recorded session data. |
 
 Billing gates reuse the Phase 7 entitlements exactly: a plan without the
 feature returns the standard 402 envelope; an exhausted per-period session
@@ -148,6 +157,67 @@ free of runtime internals.
 Every termination path removes the container **and** the extracted package
 directory; the e2e suite asserts no sandbox container survives a test.
 
+## Testing workspace extensions (Phase 12)
+
+The interactive browser gained a testing-workspace layer. Everything below
+extends the Phase 11 system — there is no second browser implementation, no
+second plan/billing/worker system, and no new trust in the uploaded extension.
+
+**Element inspection** (`inspect-at`, 6 s timeout): a fixed in-container
+script returns bounded element metadata (tag, id, ≤5 classes, ≤12 attributes,
+200-char redacted text preview, clamped rect). Password values and
+sensitive-named attributes are redacted before leaving the container; a
+selector suggestion is re-validated against the Phase 4 grammar and is `null`
+when no safe selector exists. Coordinates are bounded to the popup-or-page
+viewport and rate-limited like any input.
+
+**Controlled restart** (`restart-browser`, 120 s timeout): re-verifies the
+immutable package binding (id + SHA-256) first, then launches a fresh
+container-side browser process against the same on-disk package. Success
+**requires** a fresh extension-load evidence response; otherwise the session
+fails honestly (`browser_start_failed`). Session identity — row, evidence,
+artifacts — is preserved; the popup state resets.
+
+**Clear state** (`clear-state`, 15 s timeout): clears cookies and storage
+inside this disposable browser only. Scope is the container by construction;
+ExtensionLab data is unreachable from the browser. Failure degrades to an
+error, never a session change.
+
+**Evidence system** (table `session_evidence`, migration 008): a user-marked
+console/network/event/screenshot/test-recipe record **references** runtime
+records (`ref_id`) and stores only a redacted ≤300-char summary plus ≤16
+safe-named metadata keys (values redacted, ≤200 chars). Screenshot evidence
+must reference an existing session artifact. Quota `INTERACTIVE_BROWSER_MAX_EVIDENCE`
+(default 50) is enforced server-side. Attaching to a report appends a bounded
+entry to `report_json.interactiveEvidence` (cap 100) and pins the evidence:
+attached records refuse delete and re-attach.
+
+**Tests from sessions**: the workspace records validated user actions
+(navigate/click/type/wait/assert-element/screenshot; ≤24 steps, confirm
+required) and converts them into a **Phase 4 schema test** — every step passes
+the existing selector grammar and safe-URL policy (DNS-pinned), anything
+invalid rejects the whole recipe atomically. Recipes are stored as bounded
+`test_recipe` evidence; there is no second test table. "Run Test" queues the
+standard automated suite against the exact bound package through the existing
+engine (`createQueuedTestRun`), forwarding the current URL only when it is
+`https://`.
+
+**AI interpretation (optional, explanation-only)**: `ai/explain` and
+`ai/summary` reuse the Phase 8 pipeline (`analyze_runtime_error`,
+`summarize_report`) with minimized, redacted projections of this session
+(≤12 console entries, ≤10 network, ≤15 events). AI can never control the
+browser, mark evidence, or verify anything; responses render with the standard
+disclaimer, and the features fail honestly when AI is not configured or not in
+the caller's plan.
+
+**Honest runtime status**: the session view derives `extensionRuntimeStatus`
+(`LOADING/READY/RUNNING/RELOADING/ERROR/STOPPED`) and `failureKind` **only**
+from durable recorded evidence (extension load/reload events, popup activity,
+recorded runtime errors, terminal stop reasons). "RUNNING" is never shown
+without recorded activity; a QUEUED session reports `extension.name: null`
+rather than inventing metadata. The UI distinguishes Requested / In progress /
+Confirmed / Failed / Unavailable throughout.
+
 ## Browsers
 
 Chromium is fully supported today (the pinned sandbox image). Edge and Firefox
@@ -162,6 +232,13 @@ offers only Chromium rather than pretending otherwise.
   backpressure, no cap violations, no leaks). The fake runtime is a **real
   in-process HTTP server** speaking the runner protocol, so the handler,
   hub, and control-client code paths are the production ones.
+- `tests/phase12/` — inspection sanitization + bounds, controlled restart
+  (success and honest failure), clear-state scoping, the evidence lifecycle
+  (redaction, quota, attach-immutability), test recipes (validation, atomic
+  rejection, Phase 4 conversion), evidence-derived runtime status honesty,
+  the AI explanation layer (redaction against a pinned fake provider), and
+  the `v1` public create/status/stop surface (scopes, org isolation,
+  creator-only stop, `via: api` audits).
 - `tests/e2e/interactive-browser.e2e.test.ts` — real-Docker end-to-end with a
   deterministic fixture extension (manifest + popup + content script + service
   worker + console events). Skips with an explicit reason when Docker or the

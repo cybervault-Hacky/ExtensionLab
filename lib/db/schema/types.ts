@@ -613,3 +613,23 @@ export interface BrowserSessionArtifactRow {
   created_at: number;
   expires_at: number;
 }
+
+/** Phase 12: user-marked evidence referencing runtime records (bounded). */
+export interface SessionEvidenceRow {
+  id: string;
+  session_id: string;
+  user_id: string;
+  organization_id?: string | null;
+  kind: "console" | "network" | "event" | "screenshot" | "test_recipe";
+  ref_id: string | null;
+  label: string | null;
+  summary: string;
+  metadata_json: string;
+  package_id: string | null;
+  package_version: string | null;
+  package_sha256: string;
+  browser: string;
+  browser_version: string | null;
+  report_id: string | null;
+  created_at: number;
+}

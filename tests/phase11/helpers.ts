@@ -97,6 +97,16 @@ export interface FakeRunnerOptions {
   crashAfterMs?: number;
   /** Popup behaviour: whether the popup page loads. */
   popupSupported?: boolean;
+  /**
+   * Phase 12: queue of inspect-at element payloads (FIFO). An entry of null
+   * means "no element at that point". When empty a deterministic button is
+   * returned.
+   */
+  inspectResults?: Array<Record<string, unknown> | null>;
+  /** Phase 12: simulated restart-browser outcome. */
+  restartResult?: { ok: boolean; message?: string };
+  /** Phase 12: simulated clear-state outcome. */
+  clearStateResult?: { ok: boolean; message?: string };
 }
 
 export interface RunnerCall {
@@ -268,6 +278,50 @@ export class FakeRunner {
       case "restart-extension":
         this.emit({ type: "extension", level: "info", source: "extension", message: "Extension reloaded." });
         return { ok: true, status: "running" };
+      case "inspect-at": {
+        const queue = this.options.inspectResults ?? [];
+        const element =
+          queue.length > 0
+            ? (queue.shift() ?? null)
+            : {
+                exists: true,
+                tag: "button",
+                id: "login",
+                classes: ["btn", "primary"],
+                attributes: [
+                  { name: "type", value: "submit" },
+                  { name: "aria-label", value: "Sign in" },
+                ],
+                textPreview: "Sign in",
+                isPassword: false,
+                visible: true,
+                rect: { x: 10, y: 10, width: 120, height: 32 },
+              };
+        return {
+          ok: true,
+          status: "running",
+          data: { element: element ?? { exists: false } },
+        };
+      }
+      case "restart-browser": {
+        if (this.options.restartResult && !this.options.restartResult.ok) {
+          return { ok: false, status: "failed", message: this.options.restartResult.message ?? "Restart failed." };
+        }
+        this.popupOpen = false;
+        this.started = true;
+        this.emit({ type: "browser", level: "info", source: "browser", message: "Browser ready: Fake Chromium 140.0.0.0." });
+        return {
+          ok: true,
+          status: "running",
+          data: { evidence: "background-context", browserVersion: "140.0.0.0" },
+        };
+      }
+      case "clear-state": {
+        if (this.options.clearStateResult && !this.options.clearStateResult.ok) {
+          return { ok: false, status: "running", message: this.options.clearStateResult.message ?? "Clear failed." };
+        }
+        return { ok: true, status: "running" };
+      }
       case "stop":
         this.stopped = true;
         this.started = false;
@@ -324,13 +378,19 @@ export class FakeDriver implements SandboxDriver {
   removedContainers: string[] = [];
   createdSources: string[] = [];
   runningChecks = new Map<string, boolean>();
+  private readonly runnerOptions: FakeRunnerOptions;
+
+  /** Every created "container" runner inherits these simulated outcomes. */
+  constructor(runnerOptions: FakeRunnerOptions = {}) {
+    this.runnerOptions = runnerOptions;
+  }
 
   async available(): Promise<boolean> {
     return this.availableResult;
   }
 
   async create(sandboxId: string, sourcePath: string, runnerToken: string, options?: CreateSandboxOptions): Promise<ContainerHandle> {
-    const runner = new FakeRunner(runnerToken);
+    const runner = new FakeRunner(runnerToken, this.runnerOptions);
     await runner.ready;
     this.runners.push(runner);
     this.createdSources.push(sourcePath);

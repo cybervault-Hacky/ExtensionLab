@@ -26,7 +26,7 @@ can never run *more* than the same user could in the dashboard.
 ## Scopes
 
 `resource:read|write` for `packages`, `analysis`, `tests`, `reports`,
-`browser-matrix`, `webhooks`, `organization`. New keys default to the
+`browser-matrix`, `browser-sessions`, `webhooks`, `organization`. New keys default to the
 least-privilege read set (`packages:read analysis:read tests:read`); there is
 no unrestricted scope and an empty scope list is rejected.
 
@@ -43,6 +43,15 @@ no unrestricted scope and an empty scope list is rejected.
 | `GET /api/v1/reports/:id` | `reports:read` | Sanitized report view (same projection as the dashboard). |
 | `GET /api/v1/jobs/:id` | `tests:read` | Job status, attempts, error code. |
 | `GET /api/v1/organization` | `organization:read` | Organization, plan, seats, entitlements, key info. |
+| `POST /api/v1/browser-sessions` | `browser-sessions:write` | `{ packageId }` → create + queue an interactive session for an org package owned by the key creator. 202. |
+| `GET /api/v1/browser-sessions/:id` | `browser-sessions:read` | Safe status view (no runtime internals: no tokens, ports or ring payloads). |
+| `POST /api/v1/browser-sessions/:id/stop` | `browser-sessions:write` | Deterministic teardown; only the session creator may stop it via the API. Audited `via: api`. |
+
+Interactive sessions deliberately expose **only** create / status / stop over
+the public API. Input control, navigation, popup and inspection are not public
+endpoints: the typed interactive surface stays bound to the authenticated
+dashboard session (same-origin), so an API key can never type, click or read
+inside someone's browser.
 
 Cross-organization ids return `404 NOT_FOUND` — identical to a missing
 resource; no existence oracle exists.

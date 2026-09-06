@@ -163,6 +163,8 @@ export interface AppConfig {
     frameIntervalMs: number;
     maxFrameBytes: number;
     maxArtifactsPerSession: number;
+    /** Phase 12: maximum evidence records per session. */
+    maxEvidencePerSession: number;
     inputActionsPerMinute: number;
     keepalivePerMinute: number;
     viewportMinWidth: number;
@@ -525,7 +527,7 @@ function buildConfig(): AppConfig {
     publicApi: {
       enabled: bool("PUBLIC_API_ENABLED", true),
       keyTtlMs: num("API_KEY_TTL_MS", 365 * 24 * 3600 * 1000, problems, { min: 60_000 }),
-      maxScopes: num("API_KEY_MAX_SCOPES", 12, problems, { min: 1 }),
+      maxScopes: num("API_KEY_MAX_SCOPES", 16, problems, { min: 1 }), // >= API_SCOPES length so "all scopes" stays selectable
       rateLimits: {
         read: num("API_RATE_LIMIT_READ_PER_MIN", 240, problems, { min: 1 }),
         upload: num("API_RATE_LIMIT_UPLOAD_PER_MIN", 30, problems, { min: 1 }),
@@ -585,6 +587,7 @@ function buildConfig(): AppConfig {
       frameIntervalMs: num("INTERACTIVE_BROWSER_FRAME_INTERVAL_MS", 500, problems, { min: 200, max: 10_000 }),
       maxFrameBytes: num("INTERACTIVE_BROWSER_MAX_FRAME_BYTES", 3 * 1024 * 1024, problems, { min: 32 * 1024 }),
       maxArtifactsPerSession: num("INTERACTIVE_BROWSER_MAX_ARTIFACTS", 20, problems, { min: 1, max: 200 }),
+      maxEvidencePerSession: num("INTERACTIVE_BROWSER_MAX_EVIDENCE", 50, problems, { min: 1, max: 500 }),
       inputActionsPerMinute: num("INTERACTIVE_BROWSER_INPUT_PER_MIN", 240, problems, { min: 10 }),
       keepalivePerMinute: num("INTERACTIVE_BROWSER_KEEPALIVE_PER_MIN", 30, problems, { min: 1 }),
       viewportMinWidth: num("INTERACTIVE_BROWSER_VIEWPORT_MIN_WIDTH", 640, problems, { min: 320 }),

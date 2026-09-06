@@ -132,6 +132,7 @@ Capacity is deployment-tuned; see `.env.example` for the full
 | `INTERACTIVE_BROWSER_IDLE_TIMEOUT_MS` / `_IDLE_GRACE_MS` | `300000` / `120000` | READY/ACTIVE → IDLE → EXPIRED timings. |
 | `INTERACTIVE_BROWSER_FRAME_INTERVAL_MS` | `500` | Frame cadence floor (bandwidth cap). |
 | `INTERACTIVE_BROWSER_INPUT_PER_MIN` | `240` | Per-session input rate limit. |
+| `INTERACTIVE_BROWSER_MAX_EVIDENCE` | `50` | Phase 12 evidence records per session (references, not payload copies). |
 
 Edge and Firefox for interactive sessions arrive with the supported runtime;
 Chromium is the only offered browser until then.

@@ -594,6 +594,114 @@ export class ChromiumEngineBrowser implements SandboxBrowser {
   }
 
   /**
+   * Phase 12: full browser restart. A NEW process is launched against the
+   * same on-disk package directory (the host re-verifies the package SHA-256
+   * before issuing this command); the URL and viewport are restored and fresh
+   * extension-load evidence is collected before success is reported.
+   */
+  async restartBrowser(): Promise<InteractiveCommandResult> {
+    if (!this.process) return { ok: false, supported: true, message: "The browser is not running." };
+    this.events.emit({ type: "browser", level: "info", source: "browser", message: "Browser restart requested; launching a fresh isolated browser." });
+    await this.detachPopup();
+    const url = this.currentUrl;
+    const viewport = { ...this.viewport };
+    await this.stop();
+    const ok = await this.launch(this.extensionPath, url);
+    if (!ok) return { ok: false, supported: true, message: "The browser failed to restart." };
+    this.viewport = viewport;
+    await this.applyViewport(viewport.width, viewport.height);
+    const evidence = await this.verifyExtensionLoaded(10000);
+    this.events.emit({
+      type: "browser",
+      level: evidence.loaded ? "info" : "warning",
+      source: "browser",
+      message: evidence.loaded
+        ? "Browser restarted; extension loaded."
+        : "Browser restarted; extension did not re-register a background context.",
+    });
+    return {
+      ok: true,
+      supported: true,
+      data: {
+        evidence: evidence.evidence,
+        browserVersion: this.browserInfo ? this.browserInfo.version : null,
+      },
+    };
+  }
+
+  /**
+   * Phase 12: clears state of THIS disposable browser only (cookies + storage
+   * of every origin inside the container). Nothing outside the sandbox is
+   * reachable from here by construction.
+   */
+  async clearBrowserState(): Promise<InteractiveCommandResult> {
+    if (!this.client) return { ok: false, supported: true, message: "The browser is not running." };
+    try {
+      await this.client.Network.clearBrowserCookies();
+      await this.client.Storage.clearDataForOrigin({ origin: "http://", storageTypes: "all" });
+      await this.client.Storage.clearDataForOrigin({ origin: "https://", storageTypes: "all" });
+      if (this.extensionOrigin) {
+        await this.client.Storage.clearDataForOrigin({ origin: this.extensionOrigin, storageTypes: "all" });
+      }
+      this.events.emit({ type: "browser", level: "info", source: "browser", message: "Disposable browser state cleared (cookies and storage)." });
+      return { ok: true, supported: true };
+    } catch {
+      return { ok: false, supported: true, message: "Browser state could not be cleared." };
+    }
+  }
+
+  /**
+   * Phase 12: bounded element inspection at viewport coordinates. The script
+   * below is FIXED (coordinates are the only variable, injected as JSON
+   * numbers) and returns only safe, size-bounded metadata. Password values
+   * are redacted INSIDE the container before crossing the control channel.
+   */
+  async inspectAt(x: number, y: number, target?: "page" | "popup"): Promise<InteractiveCommandResult> {
+    const client = target === "popup" ? this.popupClient ?? null : this.client;
+    if (!client) {
+      return { ok: false, supported: true, message: target === "popup" ? "The popup is not open." : "The browser is not running." };
+    }
+    const cx = Math.max(0, Math.min(4096, Math.round(x)));
+    const cy = Math.max(0, Math.min(4096, Math.round(y)));
+    const expression = `(() => {
+      try {
+        const el = document.elementFromPoint(${cx}, ${cy});
+        if (!el) return { exists: false };
+        const tag = (el.tagName || "").toLowerCase().slice(0, 40);
+        const isPassword = tag === "input" && (el.getAttribute("type") || "").toLowerCase() === "password";
+        const classes = Array.from(el.classList || []).slice(0, 5).map((c) => String(c).slice(0, 80));
+        const attributes = [];
+        for (const attr of Array.from(el.attributes || []).slice(0, 12)) {
+          const name = String(attr.name).slice(0, 40);
+          let value = String(attr.value).slice(0, 120);
+          if (isPassword && name === "value") value = "[redacted]";
+          if (/(password|secret|token|authorization|cookie|api[-_]?key|session|credential)/i.test(name)) value = "[redacted]";
+          attributes.push({ name, value });
+        }
+        let textPreview = "";
+        if (isPassword) textPreview = "[redacted]";
+        else textPreview = String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 200);
+        const r = el.getBoundingClientRect();
+        return {
+          exists: true,
+          tag, id: String(el.id || "").slice(0, 80), classes, attributes,
+          textPreview, isPassword,
+          visible: (r.width > 0 && r.height > 0) || el.getClientRects().length > 0,
+          rect: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) },
+        };
+      } catch (e) { return { exists: false }; }
+    })()`;
+    try {
+      const result = await client.Runtime.evaluate({ expression, returnByValue: true });
+      const value = result.result?.value;
+      if (!value || typeof value !== "object") return { ok: true, supported: true, data: { exists: false } };
+      return { ok: true, supported: true, data: { element: value } };
+    } catch {
+      return { ok: false, supported: true, message: "The element could not be inspected." };
+    }
+  }
+
+  /**
    * Reloads the extension by restarting the browser against the same isolated
    * profile and the same on-disk package — the package bytes are never
    * changed, so the reload always resolves the original immutable binding.

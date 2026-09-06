@@ -65,6 +65,10 @@ export interface InteractiveBrowserSessionView {
   popupSize: { width: number; height: number } | null;
   artifactCount: number;
   extension: InteractiveExtensionInfo;
+  /** Phase 12: evidence-derived runtime status (never "RUNNING" without proof). */
+  extensionRuntimeStatus: import("./interactive").ExtensionRuntimeStatus;
+  /** Phase 12: honest failure classification (null when no failure). */
+  failureKind: import("./interactive").SessionFailureKind;
   createdAt: number;
   startedAt: number | null;
   readyAt: number | null;
@@ -105,7 +109,16 @@ export type InteractiveSessionEventType =
   | "session_queued"
   | "viewport_changed"
   | "screenshot_captured"
-  | "input";
+  | "input"
+  // Phase 12 events.
+  | "browser_restart_requested"
+  | "browser_restarted"
+  | "browser_state_cleared"
+  | "extension_reload_requested"
+  | "evidence_saved"
+  | "test_created"
+  | "test_run_started"
+  | "user_action";
 
 /** Allowlisted input actions. No arbitrary CDP payloads, ever. */
 export type BrowserInputAction =
@@ -153,4 +166,74 @@ export interface ScreenshotArtifactView {
   createdAt: number;
   expiresAt: number;
   url: string;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 12: testing workspace extensions
+// ---------------------------------------------------------------------------
+
+/**
+ * Extension runtime status derived ONLY from observed runtime evidence
+ * (load evidence, extension-origin console/service-worker events, recorded
+ * errors). Never inferred from "the API call succeeded".
+ */
+export type ExtensionRuntimeStatus =
+  | "LOADING"
+  | "READY"
+  | "RUNNING"
+  | "RELOADING"
+  | "ERROR"
+  | "STOPPED";
+
+/** Honest failure classification; distinct causes stay distinct. */
+export type SessionFailureKind =
+  | "browser_crash"
+  | "extension_load_failed"
+  | "extension_runtime_error"
+  | "page_error"
+  | "infrastructure_error"
+  | null;
+
+/** Bounded element metadata from the fixed in-container inspection script. */
+export interface ElementInspectionView {
+  exists: boolean;
+  tag: string | null;
+  id: string | null;
+  classes: string[];
+  attributes: Array<{ name: string; value: string }>;
+  textPreview: string | null;
+  isPassword: boolean;
+  visible: boolean;
+  rect: { x: number; y: number; width: number; height: number } | null;
+  /** Deterministic selector suggestion validated against Phase 4 rules. */
+  suggestedSelector: string | null;
+}
+
+/** Evidence kinds reference real runtime records; payloads are not copied. */
+export type SessionEvidenceKind = "console" | "network" | "event" | "screenshot" | "test_recipe";
+
+export interface SessionEvidenceView {
+  id: string;
+  sessionId: string;
+  kind: SessionEvidenceKind;
+  refId: string | null;
+  label: string | null;
+  summary: string;
+  metadata: Record<string, string | number | boolean | null>;
+  packageVersion: string | null;
+  packageSha256: string;
+  browser: string;
+  browserVersion: string | null;
+  reportId: string | null;
+  createdAt: number;
+}
+
+/** A reusable test draft built from session actions (Phase 4 schema). */
+export interface SessionTestRecipeView {
+  id: string;
+  sessionId: string;
+  name: string;
+  steps: Array<Record<string, string | number>>;
+  assertions: Array<Record<string, string>>;
+  createdAt: number;
 }

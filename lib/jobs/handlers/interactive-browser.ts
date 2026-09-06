@@ -266,6 +266,21 @@ export function createInteractiveBrowserStartHandler(
             touchActivity: true,
           }) ?? getSessionById(row.id)!;
         appendSessionEvent(row.id, { type: "browser_ready", message: "Disposable browser is ready." });
+        if (row.organization_id) {
+          try {
+            const { recordAuditEvent } = await import("@/lib/audit/service");
+            recordAuditEvent({
+              organizationId: row.organization_id,
+              actorUserId: row.user_id,
+              action: "interactive_browser_started",
+              resourceType: "browser_session",
+              resourceId: row.id,
+              metadata: { evidence, browserVersion: browserVersion ?? "unknown" },
+            });
+          } catch {
+            // Auditing must never break the start path.
+          }
+        }
         appendSessionEvent(row.id, {
           type: "extension_loaded",
           message:

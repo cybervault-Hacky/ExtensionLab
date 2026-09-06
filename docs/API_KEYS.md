@@ -29,7 +29,7 @@ Twelve scopes across seven resources (`packages`, `analysis`, `tests`,
 
 - empty scope lists (least privilege means *choosing*, not bypassing),
 - unknown scopes,
-- more scopes than the deployment maximum (`PUBLIC_API_MAX_SCOPES`, 12).
+- more scopes than the deployment maximum (`API_KEY_MAX_SCOPES`, 16).
 
 There is deliberately **no** `*`/unrestricted scope.
 
