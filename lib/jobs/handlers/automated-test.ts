@@ -25,6 +25,7 @@ import {
 } from "@/lib/db/repositories/test-runs";
 import { releaseReservationForResource } from "@/lib/db/repositories/quota";
 import { noteMatrixChildFinished } from "@/lib/testing/matrix-service";
+import { savedTestsAsTestCases } from "@/lib/testing/run-service";
 import { dispatchOrganizationEvent } from "@/lib/webhooks/dispatch";
 import { AppError, classifyError, toErrorCode } from "@/lib/observability/errors";
 import { logger, recordMetric } from "@/lib/observability/logger";
@@ -113,9 +114,17 @@ export function createAutomatedTestHandler(deps: AutomatedTestHandlerDeps): JobH
             cause: error,
           });
         }
-        const discovered = discoverTests(analysis).tests;
-        const wanted = new Set(payload.testIds ?? []);
-        const tests = wanted.size > 0 ? discovered.filter((test) => wanted.has(test.id)) : discovered;
+        // Phase 15: saved-test runs execute the prepared definition carried in
+        // the payload (validated + variable-resolved at enqueue time). The
+        // engine still re-applies isSafeAction + capability gates per action,
+        // so payload tampering can never smuggle an unsafe action through.
+        const tests = payload.savedTest
+          ? savedTestsAsTestCases(payload.savedTest)
+          : (() => {
+              const discovered = discoverTests(analysis).tests;
+              const wanted = new Set(payload.testIds ?? []);
+              return wanted.size > 0 ? discovered.filter((test) => wanted.has(test.id)) : discovered;
+            })();
 
         await mkdir(sessionPath, { recursive: true, mode: 0o700 });
         try {
@@ -157,6 +166,9 @@ export function createAutomatedTestHandler(deps: AutomatedTestHandlerDeps): JobH
           token,
           trusted: true,
           browser: browserId,
+          // Phase 15: suites with a "stop" failure policy mark remaining tests
+          // skipped after the first failure instead of continuing.
+          ...(payload.savedTest?.failurePolicy === "stop" ? { stopOnFailure: true } : {}),
         });
         activeRuns.set(job.id, { manager, runId, token });
 

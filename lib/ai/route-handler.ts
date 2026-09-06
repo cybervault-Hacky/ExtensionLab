@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { apiErrorResponse, assertEntitled, requestIdFrom, requireApiUser, requireSameOrigin } from "@/lib/auth/api";
-import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
+import { enforceRateLimitAsync } from "@/lib/auth/rate-limit-policy";
 import { canUseAI, getEffectivePlan } from "@/lib/billing/entitlements";
 import { getClientIp } from "@/lib/runtime/api-helpers";
 import { withLogContext } from "@/lib/observability/logger";
@@ -77,7 +77,7 @@ export function createAIRoute(spec: AIRouteSpec): (request: NextRequest) => Prom
         userId = user.id;
 
         // Per-user AI rate limit, independent of the analysis/test limits.
-        const rate = enforceRateLimit("aiRequest", `${user.id}:${getClientIp(request)}`);
+        const rate = await enforceRateLimitAsync("aiRequest", `${user.id}:${getClientIp(request)}`);
         if (!rate.ok) throw new AIError("AI_RATE_LIMITED", { message: `Too many AI requests. Please try again in ${rate.retryAfterSeconds} second(s).` });
 
         // Configuration gate before any plan check: an unconfigured deployment

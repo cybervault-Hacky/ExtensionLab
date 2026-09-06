@@ -61,6 +61,9 @@ export function createTestRun(input: {
   engine?: string | null;
   matrixRunId?: string | null;
   organizationId?: string | null;
+  /** Phase 15: bind the run to the exact saved test + version it executes. */
+  savedTestId?: string | null;
+  savedTestVersion?: number | null;
 }): TestRunRow {
   const db = getDb();
   const now = input.createdAt ?? Date.now();
@@ -68,8 +71,8 @@ export function createTestRun(input: {
   db.prepare(
     `INSERT INTO test_runs
       (id, user_id, extension_id, status, created_at, updated_at, package_id, job_id, stage, total,
-       browser_id, browser_version, engine, matrix_run_id, organization_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       browser_id, browser_version, engine, matrix_run_id, organization_id, saved_test_id, saved_test_version)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.userId,
@@ -86,6 +89,8 @@ export function createTestRun(input: {
     input.engine ?? null,
     input.matrixRunId ?? null,
     input.organizationId ?? null,
+    input.savedTestId ?? null,
+    input.savedTestVersion ?? null,
   );
   return getTestRunById(id)!;
 }
@@ -327,7 +332,7 @@ export function saveTestRunFinal(input: {
 
 export function listTestRuns(
   userId: string,
-  input: { page: number; limit: number; filter?: TestRunFilter; search?: string; browserId?: string; matrixRunId?: string },
+  input: { page: number; limit: number; filter?: TestRunFilter; search?: string; browserId?: string; matrixRunId?: string; savedTestId?: string },
 ): { items: TestRunWithExtension[]; total: number } {
   const db = getDb();
   const where: string[] = ["r.user_id = ?"];
@@ -366,6 +371,11 @@ export function listTestRuns(
   if (input.matrixRunId) {
     where.push("r.matrix_run_id = ?");
     params.push(input.matrixRunId);
+  }
+  if (input.savedTestId) {
+    // Phase 15: runs of one saved test (studio detail page + CI listing).
+    where.push("r.saved_test_id = ?");
+    params.push(input.savedTestId);
   }
   const whereSql = `WHERE ${where.join(" AND ")}`;
   const total = (

@@ -11,7 +11,17 @@ import {
   requeueFailedJob,
   summarizeLiveWorkers,
 } from "@/lib/db/repositories/jobs";
+import {
+  countSessionsByStatus,
+  listAdmittedSessions,
+  listRecentlyFinishedSessions,
+} from "@/lib/db/repositories/browser-sessions";
 import { recordAuditEvent } from "@/lib/db/repositories/audit";
+import {
+  listWorkerStatuses,
+  setWorkerDesiredStateByRef,
+  type WorkerDesiredState,
+} from "@/lib/jobs/worker-registry";
 import { AppError } from "@/lib/observability/errors";
 import { logger } from "@/lib/observability/logger";
 
@@ -49,6 +59,8 @@ export interface AdminOverview {
     sandboxAvailable: boolean | null;
     lastSeenAt: number | null;
   };
+  /** Phase 11: interactive browser session counts by status. */
+  interactiveSessions: Record<string, number>;
 }
 
 export function getAdminOverview(): AdminOverview {
@@ -62,7 +74,35 @@ export function getAdminOverview(): AdminOverview {
       sandboxAvailable: summary.sandboxAvailable,
       lastSeenAt: summary.lastSeenAt,
     },
+    interactiveSessions: countSessionsByStatus(),
   };
+}
+
+/**
+ * Phase 11: operator view of interactive sessions. Read-only, safe
+ * projections only — no runtime coordinates, container ids or tokens.
+ */
+export function listInteractiveSessionsAdmin(): Array<Record<string, unknown>> {
+  return listAdmittedSessions()
+    .concat(listRecentlyFinishedSessions(25))
+    .slice(0, 100)
+    .map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      organizationId: row.organization_id,
+      packageId: row.package_id,
+      packageVersion: row.package_version,
+      browser: row.browser,
+      browserVersion: row.browser_version,
+      status: row.status,
+      stateReason: row.state_reason,
+      stopReason: row.stop_reason,
+      createdAt: row.created_at,
+      readyAt: row.ready_at,
+      lastActivityAt: row.last_activity_at,
+      expiresAt: row.expires_at,
+      stoppedAt: row.stopped_at,
+    }));
 }
 
 export function retryJobAdmin(requestId: string | null, jobId: string): { id: string; status: string } {
@@ -97,4 +137,43 @@ export function cancelJobAdmin(requestId: string | null, jobId: string): { id: s
   recordAuditEvent({ userId: null, type: "admin_job_cancel", detail: jobId });
   logger.warn("admin.job_cancel", { requestId: requestId ?? undefined, jobId });
   return { id: jobId, status: getJobById(jobId)?.status ?? "unknown" };
+}
+
+/* ------------------------------------------------------------------------ */
+/* Phase 13: worker lifecycle admin (§55–§57)                                */
+/* ------------------------------------------------------------------------ */
+
+export function listWorkersAdmin() {
+  return listWorkerStatuses();
+}
+
+/**
+ * High-level worker control ONLY: drain (stop claiming, finish active),
+ * disable, re-enable. No shell, no exec, no per-job interference. Audited.
+ */
+export function setWorkerStateAdmin(requestId: string | null, ref: string, desired: WorkerDesiredState) {
+  const result = setWorkerDesiredStateByRef(ref, desired);
+  recordAuditEvent({ userId: null, type: "admin_worker_state", detail: `${result.ref}:${desired}` });
+  logger.warn("admin.worker_state", { requestId: requestId ?? undefined, workerRef: result.ref, desired });
+  return result;
+}
+
+/**
+ * Trigger reconciliation now: enqueues the idempotent interactive cleanup job
+ * (stale sessions, orphaned containers, expired artifacts). Audited.
+ */
+export function reconcileNowAdmin(requestId: string | null): { jobId: string | null } {
+  const { enqueueJob } = require("@/lib/jobs/queue") as typeof import("@/lib/jobs/queue");
+  const { job } = enqueueJob({
+    type: "INTERACTIVE_BROWSER_CLEANUP",
+    userId: null,
+    payload: { scope: "all" },
+    maxAttempts: 2,
+    priorityClass: "normal",
+    idempotencyKey: `ibrowser-cleanup:admin:${Math.floor(Date.now() / 30_000)}`,
+    skipBackpressure: true,
+  });
+  recordAuditEvent({ userId: null, type: "admin_reconcile", detail: job.id });
+  logger.warn("admin.reconcile", { requestId: requestId ?? undefined, jobId: job.id });
+  return { jobId: job.id };
 }

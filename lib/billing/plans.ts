@@ -55,7 +55,11 @@ const DEFAULTS: Record<PlanId, Omit<Plan, "price" | "purchasable">> = {
     advancedSuites: false,
     browserConcurrency: 1,
     maxBrowsersPerRun: 1,
-    highlights: ["Static analysis and health score", "Automated tests in an isolated browser", "Reports with 7-day share links"],
+    interactiveBrowserEnabled: true,
+    interactiveBrowserSessionLimit: 5,
+    interactiveBrowserConcurrency: 1,
+    interactiveBrowserMaxMinutes: 10,
+    highlights: ["Static analysis and health score", "Automated tests in an isolated browser", "Interactive browser testing (short sessions)", "Reports with 7-day share links"],
   },
   pro: {
     id: "pro",
@@ -81,7 +85,11 @@ const DEFAULTS: Record<PlanId, Omit<Plan, "price" | "purchasable">> = {
     advancedSuites: true,
     browserConcurrency: 2,
     maxBrowsersPerRun: 3,
-    highlights: ["Screenshots, runtime logs and network evidence", "Cross-browser matrix testing (Chromium, Edge, Firefox)", "Baseline and regression comparisons", "AI-assisted explanations and test suggestions", "Permanent share links"],
+    interactiveBrowserEnabled: true,
+    interactiveBrowserSessionLimit: 60,
+    interactiveBrowserConcurrency: 2,
+    interactiveBrowserMaxMinutes: 30,
+    highlights: ["Screenshots, runtime logs and network evidence", "Cross-browser matrix testing (Chromium, Edge, Firefox)", "Longer interactive browser sessions", "Baseline and regression comparisons", "AI-assisted explanations and test suggestions", "Permanent share links"],
   },
   business: {
     id: "business",
@@ -107,7 +115,11 @@ const DEFAULTS: Record<PlanId, Omit<Plan, "price" | "purchasable">> = {
     advancedSuites: true,
     browserConcurrency: 4,
     maxBrowsersPerRun: 3,
-    highlights: ["Priority queue for automated tests", "Highest cross-browser concurrency", "Higher AI assistance allowance", "One-year history"],
+    interactiveBrowserEnabled: true,
+    interactiveBrowserSessionLimit: 300,
+    interactiveBrowserConcurrency: 4,
+    interactiveBrowserMaxMinutes: 60,
+    highlights: ["Priority queue for automated tests", "Highest cross-browser concurrency", "Extended interactive browser sessions", "Higher AI assistance allowance", "One-year history"],
   },
 };
 
@@ -191,6 +203,10 @@ function buildPlan(id: PlanId, env: NodeJS.ProcessEnv, pricing: PlanEnv, hardMax
     advancedSuites: boolFromEnv(env, `${P}ADVANCED_SUITES`, base.advancedSuites),
     browserConcurrency: numFromEnv(env, [`${P}BROWSER_CONCURRENCY`], base.browserConcurrency, 1),
     maxBrowsersPerRun: numFromEnv(env, [`${P}MAX_BROWSERS`], base.maxBrowsersPerRun, 1),
+    interactiveBrowserEnabled: boolFromEnv(env, `${P}INTERACTIVE_BROWSER_ENABLED`, base.interactiveBrowserEnabled),
+    interactiveBrowserSessionLimit: numFromEnv(env, [`${P}INTERACTIVE_SESSIONS`], base.interactiveBrowserSessionLimit),
+    interactiveBrowserConcurrency: numFromEnv(env, [`${P}INTERACTIVE_CONCURRENCY`], base.interactiveBrowserConcurrency, 1),
+    interactiveBrowserMaxMinutes: numFromEnv(env, [`${P}INTERACTIVE_MINUTES`], base.interactiveBrowserMaxMinutes, 1),
     price: { amount: pricing.amount, currency: pricing.currency, interval: "month" },
     purchasable: id !== "free" && Boolean(pricing.priceId),
   };
@@ -226,11 +242,19 @@ export function orderedPlans(catalog: Record<PlanId, Plan>): Plan[] {
 }
 
 /** Smallest plan whose limit satisfies `required` for `kind`, or null when none does. */
-export type QuotaKind = "analysis" | "test_run" | "ai_request";
+export type QuotaKind = "analysis" | "test_run" | "ai_request" | "interactive_browser";
 
 /** The plan field that holds the per-period limit for a quota kind. */
-export function limitKeyFor(kind: QuotaKind): "analysisLimit" | "testRunLimit" | "aiRequestLimit" {
-  return kind === "analysis" ? "analysisLimit" : kind === "test_run" ? "testRunLimit" : "aiRequestLimit";
+export function limitKeyFor(
+  kind: QuotaKind,
+): "analysisLimit" | "testRunLimit" | "aiRequestLimit" | "interactiveBrowserSessionLimit" {
+  return kind === "analysis"
+    ? "analysisLimit"
+    : kind === "test_run"
+      ? "testRunLimit"
+      : kind === "ai_request"
+        ? "aiRequestLimit"
+        : "interactiveBrowserSessionLimit";
 }
 
 export function smallestPlanWithLimit(
@@ -241,7 +265,11 @@ export function smallestPlanWithLimit(
   const key = limitKeyFor(kind);
   const current = catalog[currentPlan];
   const candidate = orderedPlans(catalog).find(
-    (plan) => plan.rank > current.rank && plan[key] > current[key] && (kind !== "ai_request" || plan.aiEnabled),
+    (plan) =>
+      plan.rank > current.rank &&
+      plan[key] > current[key] &&
+      (kind !== "ai_request" || plan.aiEnabled) &&
+      (kind !== "interactive_browser" || plan.interactiveBrowserEnabled),
   );
   return candidate?.id ?? null;
 }
@@ -307,6 +335,18 @@ export function planComparisonRows(catalog: Record<PlanId, Plan>): PlanCompariso
       key: "ai",
       label: "AI assistance requests per month",
       values: val((p) => (p.aiEnabled && p.aiRequestLimit > 0 ? `${p.aiRequestLimit}` : "Not included")),
+    },
+    {
+      key: "interactive",
+      label: "Interactive browser sessions per month",
+      values: val((p) => (p.interactiveBrowserEnabled ? `${p.interactiveBrowserSessionLimit}` : "Not included")),
+    },
+    {
+      key: "interactive-minutes",
+      label: "Interactive session length",
+      values: val((p) =>
+        p.interactiveBrowserEnabled ? `Up to ${p.interactiveBrowserMaxMinutes} minutes` : "Not included",
+      ),
     },
   ];
 }

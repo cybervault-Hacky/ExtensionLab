@@ -14,7 +14,6 @@ import {
   removeWorker,
   renewLease,
   scheduleRetry,
-  upsertWorkerHeartbeat,
   type JobRow,
   type JobType,
 } from "@/lib/db/repositories/jobs";
@@ -25,6 +24,13 @@ import { AppError, classifyError, scrubDiagnostic } from "@/lib/observability/er
 import { logger, recordMetric, withLogContext } from "@/lib/observability/logger";
 import { decideRetry } from "./retry";
 import { parsePayload } from "./queue";
+import {
+  getWorkerDesiredState,
+  getWorkerRow,
+  upsertWorkerRegistration,
+  workerAcceptsClaims,
+  type WorkerCapabilities,
+} from "./worker-registry";
 import type { JobContext, JobHandler, JobPayloadMap, WorkerHealth } from "./types";
 
 export interface WorkerOptions {
@@ -43,6 +49,10 @@ export interface WorkerOptions {
   /** Reports sandbox availability in heartbeats (never exposed to clients directly). */
   sandboxProbe?: () => Promise<{ available: boolean; detail?: string }>;
   types?: readonly JobType[];
+  /** Phase 13: version reported at registration (defaults to WORKER_VERSION/package). */
+  version?: string;
+  /** Phase 13: browser capabilities reported at registration. */
+  browserCapabilities?: string[];
 }
 
 interface ActiveJob {
@@ -68,8 +78,8 @@ export class JobWorker {
   readonly workerId: string;
   private readonly handlers = new Map<JobType, JobHandler>();
   private readonly active = new Map<string, ActiveJob>();
-  private readonly options: Required<Omit<WorkerOptions, "sandboxProbe" | "types" | "userConcurrencyFor" | "orgConcurrencyFor">> &
-    Pick<WorkerOptions, "sandboxProbe" | "types" | "userConcurrencyFor" | "orgConcurrencyFor">;
+  private readonly options: Required<Omit<WorkerOptions, "sandboxProbe" | "types" | "userConcurrencyFor" | "orgConcurrencyFor" | "version" | "browserCapabilities">> &
+    Pick<WorkerOptions, "sandboxProbe" | "types" | "userConcurrencyFor" | "orgConcurrencyFor" | "version" | "browserCapabilities">;
   private stopping = false;
   private running = false;
   private loopPromise: Promise<void> | null = null;
@@ -78,6 +88,9 @@ export class JobWorker {
   private lastSandbox: { available: boolean | null; detail?: string } = { available: null };
   private lastHeartbeatAt = 0;
   private lastSweepAt = 0;
+  private lastDesiredStateCheckAt = 0;
+  private draining = false;
+  private readyAt: number | null = null;
 
   constructor(options: WorkerOptions = {}) {
     const config = getConfig();
@@ -93,6 +106,8 @@ export class JobWorker {
       userConcurrencyFor: options.userConcurrencyFor,
       sandboxProbe: options.sandboxProbe,
       types: options.types,
+      version: options.version,
+      browserCapabilities: options.browserCapabilities,
     };
   }
 
@@ -117,6 +132,7 @@ export class JobWorker {
       concurrency: this.options.concurrency,
       sandboxAvailable: this.lastSandbox.available,
       stopping: this.stopping,
+      draining: this.draining,
     };
   }
 
@@ -128,7 +144,21 @@ export class JobWorker {
     this.recoverOrphans("startup");
     void this.heartbeat();
     this.loopPromise = this.loop();
-    logger.info("worker.started", { component: "worker", concurrency: this.options.concurrency });
+    logger.info("worker.started", { component: "worker", concurrency: this.options.concurrency, version: this.workerVersion() });
+  }
+
+  /** Phase 13: version reported in registration/heartbeats. */
+  private workerVersion(): string {
+    return this.options.version ?? process.env.WORKER_VERSION ?? process.env.npm_package_version ?? "dev";
+  }
+
+  private capabilities(): WorkerCapabilities {
+    return {
+      jobTypes: [...this.handlers.keys()].sort(),
+      browsers: this.options.browserCapabilities ?? ["chromium"],
+      resourceProfiles: ["standard", "heavy"],
+      sandboxDriver: this.options.sandboxProbe ? "probed" : "configured",
+    };
   }
 
   /** Processes at most one claimable job and returns whether one ran (for tests/embedded mode). */
@@ -236,7 +266,21 @@ export class JobWorker {
           this.lastSweepAt = Date.now();
           this.recoverOrphans("sweep");
         }
-        while (!this.stopping && this.active.size < this.options.concurrency) {
+        // Phase 13: observe operator drain/disable (cooperative, bounded lag of
+        // one poll interval). Drain = stop claiming, finish active jobs.
+        if (Date.now() - this.lastDesiredStateCheckAt > 2000) {
+          this.lastDesiredStateCheckAt = Date.now();
+          const desired = getWorkerDesiredState(this.workerId);
+          if ((desired === "draining" || desired === "disabled") && !this.draining) {
+            this.draining = true;
+            logger.warn("worker.drain_started", { component: "worker", desired });
+            recordMetric("worker.draining", 1);
+          } else if (desired === "running" && this.draining) {
+            this.draining = false;
+            logger.info("worker.drain_cancelled", { component: "worker" });
+          }
+        }
+        while (!this.stopping && !this.draining && this.active.size < this.options.concurrency) {
           const job = this.claim();
           if (!job) break;
           claimedAny = true;
@@ -269,6 +313,7 @@ export class JobWorker {
   }
 
   private claim(): JobRow | null {
+    if (this.draining) return null;
     const types = (this.options.types ?? [...this.handlers.keys()]).filter((type) => this.handlers.has(type));
     if (types.length === 0) return null;
     // Per-user concurrency: users already running an AUTOMATED_TEST are skipped.
@@ -443,15 +488,24 @@ export class JobWorker {
       }
     }
     try {
-      upsertWorkerHeartbeat({
+      if (this.lastSandbox.available === true && this.readyAt === null) this.readyAt = Date.now();
+      upsertWorkerRegistration({
         id: this.workerId,
         startedAt: this.startedAt,
         concurrency: this.options.concurrency,
         activeJobs: this.active.size,
         sandboxAvailable: this.lastSandbox.available,
         sandboxDetail: this.lastSandbox.detail ?? null,
-        stopping: this.stopping,
+        stopping: this.stopping || this.draining,
+        version: this.workerVersion(),
+        capabilities: this.capabilities(),
+        readyAt: this.readyAt,
       });
+      const own = getWorkerRow(this.workerId);
+      if (own && !workerAcceptsClaims(own)) {
+        // Defensive parity: registry derivation and local flags must agree.
+        this.draining = true;
+      }
     } catch (error) {
       logger.warn("worker.heartbeat_failed", { component: "worker", errorCode: classifyError(error).code });
     }

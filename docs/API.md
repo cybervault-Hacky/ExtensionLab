@@ -26,7 +26,7 @@ can never run *more* than the same user could in the dashboard.
 ## Scopes
 
 `resource:read|write` for `packages`, `analysis`, `tests`, `reports`,
-`browser-matrix`, `webhooks`, `organization`. New keys default to the
+`browser-matrix`, `browser-sessions`, `webhooks`, `organization`. New keys default to the
 least-privilege read set (`packages:read analysis:read tests:read`); there is
 no unrestricted scope and an empty scope list is rejected.
 
@@ -43,6 +43,15 @@ no unrestricted scope and an empty scope list is rejected.
 | `GET /api/v1/reports/:id` | `reports:read` | Sanitized report view (same projection as the dashboard). |
 | `GET /api/v1/jobs/:id` | `tests:read` | Job status, attempts, error code. |
 | `GET /api/v1/organization` | `organization:read` | Organization, plan, seats, entitlements, key info. |
+| `POST /api/v1/browser-sessions` | `browser-sessions:write` | `{ packageId }` → create + queue an interactive session for an org package owned by the key creator. 202. |
+| `GET /api/v1/browser-sessions/:id` | `browser-sessions:read` | Safe status view (no runtime internals: no tokens, ports or ring payloads). |
+| `POST /api/v1/browser-sessions/:id/stop` | `browser-sessions:write` | Deterministic teardown; only the session creator may stop it via the API. Audited `via: api`. |
+
+Interactive sessions deliberately expose **only** create / status / stop over
+the public API. Input control, navigation, popup and inspection are not public
+endpoints: the typed interactive surface stays bound to the authenticated
+dashboard session (same-origin), so an API key can never type, click or read
+inside someone's browser.
 
 Cross-organization ids return `404 NOT_FOUND` — identical to a missing
 resource; no existence oracle exists.
@@ -145,3 +154,39 @@ also the documented SDK/CLI contract (a thin wrapper over these endpoints).
 Breaking changes ship as `/api/v2` with a migration window; within a version
 fields are only added. Disable the public API entirely with
 `PUBLIC_API_ENABLED=false` (routes then fail closed with `API_DISABLED`).
+
+## Phase 13 admin & report endpoints
+
+Admin API (token-authenticated, read-heavy, no exec/CDP):
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/admin/workers` | fleet: registered workers, derived states |
+| POST | `/api/admin/workers/{ref}/state` | `{"desired":"drain"\|"disable"\|"ready"}` |
+| GET | `/api/admin/capacity` | queue depth, live sessions, slots, failures by class |
+| GET | `/api/admin/failures` | recent failures grouped by failure class |
+| GET | `/api/admin/metrics` | metric registry snapshot |
+| POST | `/api/admin/reconcile` | out-of-band orphan-container reconcile |
+
+User API:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/api/reports/{id}/pin` | pin a report (protects its artifacts from retention) |
+| DELETE | `/api/reports/{id}/pin` | unpin |
+
+## Phase 15: saved-test CI endpoints
+
+| Method & path | Scope | Notes |
+| --- | --- | --- |
+| `POST /api/v1/tests/:testId/runs` | `tests:write` | Trigger a run of a saved test or suite. Safe params only: `version`, `browser`/`browsers`, `variables`, `testUrl` — everything else is rejected; all values are validated server-side. Honors `Idempotency-Key`. 202 with `runs[]`. |
+| `GET /api/v1/tests/:testId/runs` | `tests:read` | Paginated run history for the test with CI statuses and exit codes. |
+| `GET /api/v1/tests/:testId/runs/:runId` | `tests:read` | Poll one run: `QUEUED`/`STARTING`/`RUNNING`/`COMPLETED`/`FAILED`/`TIMEOUT`/`CANCELLED`, totals and per-test results once finished. `exitCode` is 0 only on `COMPLETED`. |
+
+Dashboard endpoints (session auth, same-origin): `GET/POST /api/tests/saved`,
+`GET/PATCH/POST /api/tests/saved/:testId` (detail/update/duplicate),
+`POST /api/tests/saved/:testId/run`, `GET /api/tests/saved/:testId/runs`,
+`GET /api/tests/saved/:testId/export`, `GET/POST /api/tests/saved/:testId/baseline`
+(`?runId=` compares), `POST /api/tests/saved/import`, `GET/POST
+/api/tests/suites`, `GET /api/tests/suites/:suiteId`,
+`POST /api/tests/suites/:suiteId/run`, `GET /api/tests/templates`.

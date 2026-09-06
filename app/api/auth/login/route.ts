@@ -11,7 +11,7 @@ import {
   rateLimited,
   requireSameOrigin,
 } from "@/lib/auth/api";
-import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
+import { enforceRateLimitAsync } from "@/lib/auth/rate-limit-policy";
 import { normalizeEmail } from "@/lib/auth/validation";
 import { setSessionCookie, startSession } from "@/lib/auth/session";
 
@@ -27,7 +27,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     requireSameOrigin(request);
     const ip = getClientIp(request);
-    const limit = enforceRateLimit("login", ip);
+    const limit = await enforceRateLimitAsync("login", ip);
     if (!limit.ok) throw rateLimited(limit.retryAfterSeconds);
 
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;

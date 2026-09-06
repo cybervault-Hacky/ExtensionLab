@@ -42,7 +42,19 @@ export type SandboxAction =
   | "reload"
   | "restart-extension"
   | "open-url"
-  | "clear-console";
+  | "clear-console"
+  // Phase 11 interactive commands (validated allowlist; no CDP passthrough).
+  | "go-back"
+  | "go-forward"
+  | "set-viewport"
+  | "input"
+  | "open-popup"
+  | "close-popup"
+  | "get-url"
+  // Phase 12 interactive commands (same allowlist model; no CDP passthrough).
+  | "inspect-at"
+  | "restart-browser"
+  | "clear-state";
 
 export interface RuntimeEvent {
   id: string;

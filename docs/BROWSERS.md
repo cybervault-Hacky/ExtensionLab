@@ -253,3 +253,13 @@ images, missing-image fail-closed, quota atomicity, billing gate + cancel,
 regression A/B with two package versions). Without Docker the suites **skip
 with an explicit reason**; with `EXTENSIONLAB_E2E_DOCKER=1` a missing daemon
 or missing image is a **hard failure** — browser results are never faked.
+
+## Phase 13: image identity & health
+
+- Execution identity is an **image digest** (recorded per session), never a
+  mutable `latest` tag; unverifiable digests surface as `unknown` — they are
+  never fabricated.
+- Container start waits on the container-local health check before a session
+  is declared READY.
+- Resource profiles: `standard` (768m/0.5 CPU) and `heavy` (1536m/1.0 CPU, plan
+  entitlement) on the same hardened baseline — see [RUNTIME.md](RUNTIME.md).

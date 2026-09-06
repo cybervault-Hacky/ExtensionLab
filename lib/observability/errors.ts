@@ -36,6 +36,12 @@ export const ERROR_CATALOG = {
   SUBSCRIPTION_STATE_INVALID: { status: 409, message: "This action is not possible in the subscription's current state.", retryable: false },
   WEBHOOK_SIGNATURE_INVALID: { status: 400, message: "The webhook signature could not be verified.", retryable: false },
   PAYMENT_REQUIRED: { status: 402, message: "This feature requires a paid plan.", retryable: false },
+  // Phase 14 Razorpay billing.
+  BILLING_PROVIDER_UNAVAILABLE: { status: 503, message: "The payment provider is unavailable right now. Please try again shortly.", retryable: true },
+  BILLING_CONFIGURATION_ERROR: { status: 500, message: "Billing is misconfigured on this deployment. The team has been notified.", retryable: false },
+  PAYMENT_VERIFICATION_FAILED: { status: 400, message: "We couldn't verify this payment. Nothing was activated.", retryable: false },
+  PAYMENT_MISMATCH: { status: 400, message: "The payment details don't match the expected plan. Nothing was activated.", retryable: false },
+  DUPLICATE_PAYMENT: { status: 409, message: "This payment was already processed.", retryable: false },
   // Phase 9 cross-browser testing.
   BROWSER_RUNTIME_UNAVAILABLE: { status: 503, message: "This browser runtime is not available on this deployment.", retryable: false },
   BROWSER_NOT_SUPPORTED: { status: 400, message: "This browser is not supported for testing.", retryable: false },
@@ -70,6 +76,17 @@ export const ERROR_CATALOG = {
   POLICY_FAILED: { status: 200, message: "The quality gates for this organization were not met.", retryable: false },
   SSO_NOT_CONFIGURED: { status: 404, message: "Single sign-on is not configured for this organization.", retryable: false },
   SSO_NOT_ENABLED: { status: 404, message: "Single sign-on is not available on this deployment.", retryable: false },
+  // Phase 11 interactive browser sessions.
+  BROWSER_SESSION_NOT_FOUND: { status: 404, message: "Browser session not found.", retryable: false },
+  BROWSER_SESSION_EXPIRED: { status: 410, message: "This browser session has expired.", retryable: false },
+  BROWSER_SESSION_LIMIT: { status: 429, message: "The browser session limit is reached. Try again when a slot frees up.", retryable: true },
+  BROWSER_SESSION_START_FAILED: { status: 500, message: "The browser session could not be started.", retryable: true },
+  BROWSER_UNAVAILABLE: { status: 503, message: "Interactive browser testing is currently unavailable.", retryable: true },
+  PACKAGE_UNAVAILABLE: { status: 410, message: "The extension package for this session is no longer available.", retryable: false },
+  UNSAFE_URL: { status: 400, message: "This URL cannot be opened in the interactive browser.", retryable: false },
+  INPUT_REJECTED: { status: 400, message: "This input action was rejected.", retryable: false },
+  POPUP_UNAVAILABLE: { status: 409, message: "This extension does not provide a popup.", retryable: false },
+  SESSION_NOT_READY: { status: 409, message: "The browser session is not ready yet.", retryable: true },
   INTERNAL: { status: 500, message: "The request could not be completed.", retryable: false },
 } as const;
 

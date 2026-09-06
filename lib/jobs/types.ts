@@ -34,6 +34,12 @@ export interface AutomatedTestPayload {
   browserId?: string;
   /** Phase 9: parent matrix linkage, when this run belongs to a browser matrix. */
   matrixRunId?: string;
+  /**
+   * Phase 15: prepared saved-test definition (validated + variable-resolved
+   * at enqueue time; plain JSON only). Present = execute this instead of the
+   * discovered built-in suite. The engine re-validates every action.
+   */
+  savedTest?: import("@/lib/testing/run-service").PreparedSavedTest;
 }
 
 export interface EmailPayload {
@@ -66,6 +72,19 @@ export interface OrgExportPayload {
   organizationId: string;
 }
 
+export interface InteractiveBrowserStartPayload {
+  sessionId: string;
+}
+
+export interface InteractiveBrowserStopPayload {
+  sessionId: string;
+  /** Stable machine reason recorded on the session ("expired" | "idle" | ...). */
+  reason: string;
+  to: "STOPPED" | "EXPIRED" | "FAILED";
+}
+
+export type InteractiveBrowserCleanupScope = "all" | "sessions" | "artifacts";
+
 export type JobPayloadMap = {
   AUTOMATED_TEST: AutomatedTestPayload;
   EMAIL: EmailPayload;
@@ -74,6 +93,9 @@ export type JobPayloadMap = {
   ANALYSIS: AnalysisPayload;
   WEBHOOK_DELIVERY: WebhookDeliveryPayload;
   ORG_EXPORT: OrgExportPayload;
+  INTERACTIVE_BROWSER_START: InteractiveBrowserStartPayload;
+  INTERACTIVE_BROWSER_STOP: InteractiveBrowserStopPayload;
+  INTERACTIVE_BROWSER_CLEANUP: { scope?: InteractiveBrowserCleanupScope };
 };
 
 export interface JobContext<T extends JobType = JobType> {
@@ -108,4 +130,6 @@ export interface WorkerHealth {
   concurrency: number;
   sandboxAvailable: boolean | null;
   stopping: boolean;
+  /** Phase 13: operator-requested (or shutdown) drain in progress. */
+  draining?: boolean;
 }

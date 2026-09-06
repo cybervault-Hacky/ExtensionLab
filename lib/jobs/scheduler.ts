@@ -18,7 +18,11 @@ export class Scheduler {
   start(): void {
     if (this.timer) return;
     this.scheduleCleanup();
-    this.timer = setInterval(() => this.scheduleCleanup(), this.intervalMs);
+    this.scheduleInteractiveCleanup();
+    this.timer = setInterval(() => {
+      this.scheduleCleanup();
+      this.scheduleInteractiveCleanup();
+    }, this.intervalMs);
     this.timer.unref?.();
   }
 
@@ -38,6 +42,29 @@ export class Scheduler {
         maxAttempts: 2,
         priority: -10,
         idempotencyKey: `cleanup:${window}`,
+        skipBackpressure: true,
+      });
+      return job.id;
+    } catch (error) {
+      logger.warn("scheduler.enqueue_failed", { component: "scheduler", detail: error instanceof Error ? error.name : "unknown" });
+      return null;
+    }
+  }
+
+  /**
+   * Phase 11: periodic interactive-browser sweep (expiry, idle timeouts,
+   * orphan recovery, artifact retention). Same idempotency discipline.
+   */
+  scheduleInteractiveCleanup(now = Date.now()): string | null {
+    const window = Math.floor(now / this.intervalMs);
+    try {
+      const { job } = enqueueJob({
+        type: "INTERACTIVE_BROWSER_CLEANUP",
+        userId: null,
+        payload: { scope: "all" },
+        maxAttempts: 2,
+        priority: -10,
+        idempotencyKey: `ibrowser-cleanup:${window}`,
         skipBackpressure: true,
       });
       return job.id;

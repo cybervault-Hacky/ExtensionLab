@@ -19,6 +19,10 @@ import type { TestRunRow } from "@/lib/db/schema/types";
 import type { ExtensionAnalysis } from "@/types/extension";
 import type {
   DiagnosticFinding,
+  TestCase,
+  TestCaseInput,
+  TestAction,
+  TestAssertion,
   TestResult,
   TestRunInfo,
   TestRunOutcome,
@@ -38,6 +42,62 @@ import type {
 
 const ACTIVE_STATES: TestRunState[] = ["idle", "queued", "preparing", "starting", "running", "stopping"];
 
+/**
+ * Phase 15: builds engine TestCase inputs from a prepared saved test. Pure
+ * data → data; `applicable` defaults to true because saved tests are executed
+ * exactly as authored (browser capability gates still apply per action).
+ * Deterministic ids (`saved_<testId>_v<version>`) make dependencies and run
+ * results reproducible. Exported for the worker, which rebuilds the same
+ * TestCases from the job payload.
+ */
+export function preparedMemberAsTestCase(member: PreparedSavedTestMember): TestCaseInput {
+  return {
+    id: `saved_${member.testId}_v${member.version}`,
+    name: member.name,
+    description: member.description,
+    category: member.category as TestCaseInput["category"],
+    severity: member.severity as TestCaseInput["severity"],
+    timeout: member.timeoutMs,
+    steps: [...member.setup, ...member.actions],
+    assertions: member.assertions,
+    applicable: () => true,
+    ...(member.cleanup.length > 0 ? { cleanupSteps: member.cleanup } : {}),
+    ...(member.dependsOn && member.dependsOn.length > 0 ? { dependsOn: member.dependsOn } : {}),
+  };
+}
+
+export function savedTestsAsTestCases(prepared: PreparedSavedTest): TestCase[] {
+  const members = prepared.members ?? [
+    {
+      testId: prepared.testId,
+      version: prepared.version,
+      name: prepared.name,
+      description: prepared.description,
+      category: prepared.category,
+      severity: prepared.severity,
+      timeoutMs: prepared.timeoutMs,
+      setup: prepared.setup,
+      actions: prepared.actions,
+      cleanup: prepared.cleanup,
+      assertions: prepared.assertions,
+    },
+  ];
+  const versionByTestId = new Map<string, number>(members.map((member) => [member.testId, member.version]));
+  // Suite ordering: dependencies reference earlier members only (validated at
+  // suite-save time); they are remapped to the deterministic generated ids
+  // the engine reports results under.
+  return members.map((member) => {
+    const dependsOn = (member.dependsOn ?? [])
+      .filter((testId) => versionByTestId.has(testId))
+      .map((testId) => `saved_${testId}_v${versionByTestId.get(testId)!}`);
+    return preparedMemberAsTestCase({ ...member, ...(dependsOn.length > 0 ? { dependsOn } : {}) });
+  });
+}
+
+function versionOf(members: PreparedSavedTestMember[], testId: string): number {
+  return members.find((member) => member.testId === testId)?.version ?? 1;
+}
+
 export interface CreateRunResult {
   runId: string;
   token: string;
@@ -45,6 +105,46 @@ export interface CreateRunResult {
   suite: { total: number };
   extensionId: string | null;
   packageId: string;
+}
+
+/**
+ * Phase 15: plain-JSON form of a validated, variable-resolved saved test as
+ * carried in the AUTOMATED_TEST job payload. The worker rebuilds a TestCase
+ * from this and the engine re-applies isSafeAction + capability gates at
+ * execution time — validation is never skipped, and nothing executable is
+ * serialized (only allowlisted action/assertion data).
+ */
+export interface PreparedSavedTest {
+  testId: string;
+  version: number;
+  name: string;
+  description: string;
+  category: string;
+  severity: string;
+  timeoutMs: number;
+  setup: TestAction[];
+  actions: TestAction[];
+  cleanup: TestAction[];
+  assertions: TestAssertion[];
+  /** Ordered saved-test suite members (single entry = standalone test run). */
+  members?: PreparedSavedTestMember[];
+  failurePolicy?: "stop" | "continue";
+}
+
+export interface PreparedSavedTestMember {
+  testId: string;
+  version: number;
+  name: string;
+  description: string;
+  category: string;
+  severity: string;
+  timeoutMs: number;
+  setup: TestAction[];
+  actions: TestAction[];
+  cleanup: TestAction[];
+  assertions: TestAssertion[];
+  /** Phase 9-style explicit dependencies on earlier members by generated id. */
+  dependsOn?: string[];
 }
 
 export function createQueuedTestRun(input: {
@@ -56,9 +156,11 @@ export function createQueuedTestRun(input: {
   /** Phase 10: organization ownership + requested browser runtime. */
   organizationId?: string | null;
   browserId?: string | null;
+  /** Phase 15: execute this prepared saved test instead of the built-in suite. */
+  savedTest?: PreparedSavedTest;
 }): CreateRunResult {
   const config = getConfig();
-  const { tests } = discoverTests(input.analysis);
+  const tests: TestCase[] = input.savedTest ? savedTestsAsTestCases(input.savedTest) : discoverTests(input.analysis).tests;
   const token = generateSessionToken();
 
   const created = transaction(getDb(), () => {
@@ -76,6 +178,7 @@ export function createQueuedTestRun(input: {
       stage: "Queued",
       packageId: input.packageId,
       total: tests.length,
+      ...(input.savedTest ? { savedTestId: input.savedTest.testId, savedTestVersion: input.savedTest.version } : {}),
       ...(input.organizationId ? { organizationId: input.organizationId } : {}),
       ...(input.browserId ? { browserId: input.browserId } : {}),
     });
@@ -93,6 +196,7 @@ export function createQueuedTestRun(input: {
         testIds: tests.map((test) => test.id),
         reservationId: reservation.id,
         ...(input.browserId ? { browserId: input.browserId } : {}),
+        ...(input.savedTest ? { savedTest: input.savedTest } : {}),
       },
       resourceType: "test_run",
       resourceId: run.id,

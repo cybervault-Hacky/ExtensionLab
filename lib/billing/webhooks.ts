@@ -5,7 +5,9 @@ import {
   finishBillingEvent,
   findUserIdByProviderCustomer,
   getCheckoutRecordByProviderSession,
+  getSubscriptionById,
   getSubscriptionByProviderId,
+  recordPaymentIfNew,
   updateCheckoutStatus,
   upsertBillingCustomer,
 } from "@/lib/db/repositories/billing";
@@ -155,7 +157,25 @@ function handle(providerName: string, event: ProviderEvent): HandleResult {
           // Amount + currency only; never payment instrument details.
           detail: `${event.type === "invoice.paid" ? "Paid" : "Failed"} · ${(invoice.amountDue / 100).toFixed(2)} ${invoice.currency.toUpperCase()}`,
         });
-        recordMetric(event.type === "invoice.paid" ? "billing.payment_succeeded" : "billing.payment_failed", 1, { provider: providerName });
+        // Phase 14: normalized payment ledger. Idempotent per provider payment
+        // id; duplicate deliveries converge (§17/§30). Instrument data never
+        // reaches this layer — Razorpay owns the card.
+        const planId = subscriptionId ? (getSubscriptionById(subscriptionId)?.plan_id ?? "pro") : "pro";
+        const recorded = recordPaymentIfNew({
+          userId,
+          provider: providerName,
+          providerPaymentId: invoice.id,
+          providerInvoiceId: invoice.id,
+          providerSubscriptionId: invoice.subscriptionId,
+          planId,
+          amount: invoice.amountDue,
+          currency: invoice.currency,
+          status: event.type === "invoice.paid" ? "paid" : "failed",
+          createdAt: invoice.createdAt,
+        });
+        if (recorded.created) {
+          recordMetric(event.type === "invoice.paid" ? "billing.payment_recorded" : "billing.payment_failed", 1, { provider: providerName });
+        }
       }
       return { outcome: userId ? "processed" : "ignored", userId, subscriptionId };
     }

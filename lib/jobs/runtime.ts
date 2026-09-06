@@ -11,6 +11,11 @@ import { createAutomatedTestHandler } from "./handlers/automated-test";
 import { createCleanupHandler } from "./handlers/cleanup";
 import { createWebhookDeliveryHandler } from "./handlers/webhook-delivery";
 import { createOrgExportHandler } from "./handlers/org-export";
+import {
+  createInteractiveBrowserCleanupHandler,
+  createInteractiveBrowserStartHandler,
+  createInteractiveBrowserStopHandler,
+} from "./handlers/interactive-browser";
 import { getOrganizationEntitlements } from "@/lib/organizations/entitlements";
 import { createEmailHandler } from "./handlers/email";
 
@@ -45,7 +50,10 @@ export function createWorker(options: WorkerOptions = {}): JobWorker {
     .register(createEmailHandler())
     .register(createCleanupHandler())
     .register(createWebhookDeliveryHandler())
-    .register(createOrgExportHandler());
+    .register(createOrgExportHandler())
+    .register(createInteractiveBrowserStartHandler())
+    .register(createInteractiveBrowserStopHandler())
+    .register(createInteractiveBrowserCleanupHandler());
   return worker;
 }
 

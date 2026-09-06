@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { EventHub } from "./events";
 import { createSandboxBrowser, type SandboxBrowser } from "./browsers";
 import { isSandboxBrowserId } from "./browsers/types";
+import type { InteractiveInputAction } from "./browsers/types";
 import { startTestPageServer } from "./test-page";
 import { cleanupRuntimeDirectories } from "./cleanup";
 import { DEFAULT_TEST_PAGE_URL, validatePublicUrl } from "./security";
@@ -9,8 +10,45 @@ import { DEFAULT_TEST_PAGE_URL, validatePublicUrl } from "./security";
 type SandboxStatus = "idle" | "starting" | "running" | "stopped" | "failed";
 
 const TOKEN = process.env.RUNNER_TOKEN || "";
-const ALLOWED_ACTIONS = new Set(["start", "stop", "reload", "open-url", "restart-extension", "clear-console"]);
+const ALLOWED_ACTIONS = new Set([
+  "start",
+  "stop",
+  "reload",
+  "open-url",
+  "restart-extension",
+  "clear-console",
+  // Phase 11 interactive commands (validated below; no protocol passthrough).
+  "go-back",
+  "go-forward",
+  "set-viewport",
+  "input",
+  "open-popup",
+  "close-popup",
+  "get-url",
+]);
 const ALLOWED_TEST_ACTIONS = new Set(["open_url", "reload_page", "wait", "click", "type", "select", "scroll", "inspect_text", "inspect_element", "open_popup", "clear_console", "capture_screenshot"]);
+
+/** Independent runner-side input allowlist (the host validates separately). */
+const RUNNER_INPUT_TYPES = new Set([
+  "pointer_move",
+  "pointer_down",
+  "pointer_up",
+  "click",
+  "double_click",
+  "type_text",
+  "key_press",
+  "scroll",
+]);
+const RUNNER_ALLOWED_KEYS = new Set([
+  "Enter", "Tab", "Escape", "Backspace", "Delete", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+  "Home", "End", "PageUp", "PageDown", "Space",
+  ...Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i)),
+  ...Array.from({ length: 10 }, (_, i) => String(i)),
+]);
+const VIEWPORT_MIN_WIDTH = 320;
+const VIEWPORT_MAX_WIDTH = 3840;
+const VIEWPORT_MIN_HEIGHT = 240;
+const VIEWPORT_MAX_HEIGHT = 2160;
 
 const events = new EventHub();
 // The browser runtime is fixed by the container image/ENV — never by requests.
@@ -53,6 +91,67 @@ interface SafeTestActionInput {
 
 function isSafeString(value: unknown, max: number): value is string {
   return typeof value === "string" && value.length <= max;
+}
+
+/** Validates one interactive input action with the runner's own allowlist. */
+function validateInteractiveInput(raw: unknown): { ok: true; action: InteractiveInputAction } | { ok: false; reason: string } {
+  if (!raw || typeof raw !== "object") return { ok: false, reason: "An input action object is required." };
+  const action = raw as Record<string, unknown>;
+  if (typeof action.type !== "string" || !RUNNER_INPUT_TYPES.has(action.type)) {
+    return { ok: false, reason: "Unsupported input action." };
+  }
+  const target = action.target === undefined || action.target === "page" ? "page" : action.target === "popup" ? "popup" : null;
+  if (target === null) return { ok: false, reason: "Invalid input target." };
+  const viewport = target === "popup"
+    ? { width: 3840, height: 2160 }
+    : browser.currentViewport?.() ?? { width: VIEWPORT_MAX_WIDTH, height: VIEWPORT_MAX_HEIGHT };
+  const needsCoords = ["pointer_move", "pointer_down", "pointer_up", "click", "double_click", "scroll"].includes(action.type);
+  if (needsCoords) {
+    const x = Math.round(Number(action.x));
+    const y = Math.round(Number(action.y));
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > viewport.width || y > viewport.height) {
+      return { ok: false, reason: "Coordinates are outside the viewport." };
+    }
+  }
+  if (action.type === "type_text" && (!isSafeString(action.text, 2000) || typeof action.text !== "string")) {
+    return { ok: false, reason: "Text is too long or invalid." };
+  }
+  if (action.type === "key_press" && (typeof action.key !== "string" || !RUNNER_ALLOWED_KEYS.has(action.key))) {
+    return { ok: false, reason: "This key is not supported." };
+  }
+  if (action.type === "scroll") {
+    for (const delta of [action.deltaX, action.deltaY]) {
+      const value = Number(delta);
+      if (!Number.isFinite(value) || Math.abs(value) > 3000) {
+        return { ok: false, reason: "Scroll delta is out of range." };
+      }
+    }
+  }
+  if (action.button !== undefined && action.button !== "left" && action.button !== "right") {
+    return { ok: false, reason: "Unsupported mouse button." };
+  }
+  return { ok: true, action: action as unknown as InteractiveInputAction };
+}
+
+/** Safe relative popup path inside the extension directory (no traversal). */
+function isSafePopupPath(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 200 &&
+    /^[A-Za-z0-9_][A-Za-z0-9._\-\/]*\.html?$/i.test(value) &&
+    !value.includes("..")
+  );
+}
+
+function unsupported(kind: string): { ok: boolean; status: string; message: string } {
+  events.emit({
+    type: "extension",
+    level: "warning",
+    source: "extension",
+    message: `${kind} is not supported by this browser runtime.`,
+  });
+  return { ok: false, status, message: `${kind} is not supported by this browser runtime.` };
 }
 
 async function handleTestAction(input: SafeTestActionInput): Promise<{ ok: boolean; status: string; data?: unknown; message?: string }> {
@@ -133,8 +232,8 @@ async function handleTestAction(input: SafeTestActionInput): Promise<{ ok: boole
   }
 }
 
-async function handleCommand(body: unknown): Promise<{ ok: boolean; status: string; message?: string }> {
-  const parsed = body as { command?: string; payload?: { url?: string } };
+async function handleCommand(body: unknown): Promise<{ ok: boolean; status: string; message?: string; data?: Record<string, unknown> }> {
+  const parsed = body as { command?: string; payload?: { url?: string; width?: number; height?: number; action?: unknown; popupPath?: string; testUrl?: string; x?: number; y?: number; target?: string } };
   const command = parsed?.command;
   if (!command || !ALLOWED_ACTIONS.has(command)) {
     return { ok: false, status, message: "Unsupported command." };
@@ -144,14 +243,43 @@ async function handleCommand(body: unknown): Promise<{ ok: boolean; status: stri
     case "start": {
       status = "starting";
       events.emit({ type: "sandbox", level: "info", source: "runner", message: "Starting sandbox." });
-      const ok = await browser.start("/tmp/extension", defaultPage);
+      // Optional initial URL: validated with the same public-URL policy. When
+      // absent the browser opens about:blank (never an internal page).
+      let startUrl = "about:blank";
+      const requestedUrl = typeof parsed?.payload?.testUrl === "string" ? parsed.payload.testUrl : undefined;
+      if (requestedUrl) {
+        const validated = validatePublicUrl(requestedUrl);
+        if (!validated.ok) return { ok: false, status, message: validated.reason ?? "URL blocked." };
+        startUrl = validated.url;
+      }
+      const ok = await browser.start("/tmp/extension", startUrl);
       if (!ok) {
         status = "failed";
         return { ok: false, status, message: "Browser startup failed." };
       }
+      // Real extension-load evidence gates "running": the host only marks the
+      // session READY when this succeeds.
+      let evidence = "none";
+      if (browser.verifyExtensionLoaded) {
+        const verified = await browser.verifyExtensionLoaded(12000);
+        evidence = verified.evidence;
+        if (!verified.loaded) {
+          status = "failed";
+          events.emit({ type: "extension", level: "error", source: "extension", message: "The extension did not load in the isolated browser." });
+          await browser.stop();
+          return { ok: false, status, message: "The extension did not load in the isolated browser." };
+        }
+      }
       status = "running";
       events.emit({ type: "sandbox", level: "info", source: "runner", message: "Sandbox ready." });
-      return { ok: true, status };
+      return {
+        ok: true,
+        status,
+        data: {
+          evidence,
+          browserVersion: typeof browser.getBrowserVersion === "function" ? browser.getBrowserVersion() : null,
+        },
+      };
     }
     case "open-url": {
       const url = parsed?.payload?.url ?? "";
@@ -163,10 +291,87 @@ async function handleCommand(body: unknown): Promise<{ ok: boolean; status: stri
       await browser.openPage(defaultPage);
       return { ok: true, status };
     }
+    case "go-back": {
+      if (!browser.goBack) return unsupported("Back navigation");
+      const result = await browser.goBack();
+      return { ok: result.ok, status, message: result.message, data: result.data };
+    }
+    case "go-forward": {
+      if (!browser.goForward) return unsupported("Forward navigation");
+      const result = await browser.goForward();
+      return { ok: result.ok, status, message: result.message, data: result.data };
+    }
+    case "set-viewport": {
+      if (!browser.setViewport) return unsupported("Viewport changes");
+      const width = Math.round(Number(parsed?.payload?.width));
+      const height = Math.round(Number(parsed?.payload?.height));
+      if (
+        !Number.isInteger(width) || !Number.isInteger(height) ||
+        width < VIEWPORT_MIN_WIDTH || width > VIEWPORT_MAX_WIDTH ||
+        height < VIEWPORT_MIN_HEIGHT || height > VIEWPORT_MAX_HEIGHT
+      ) {
+        return { ok: false, status, message: "Viewport dimensions are out of range." };
+      }
+      const result = await browser.setViewport(width, height);
+      return { ok: result.ok, status, message: result.message, data: result.data };
+    }
+    case "input": {
+      if (!browser.dispatchInput) return unsupported("Interactive input");
+      const validated = validateInteractiveInput(parsed?.payload?.action);
+      if (!validated.ok) return { ok: false, status, message: validated.reason };
+      const result = await browser.dispatchInput(validated.action);
+      return { ok: result.ok, status, message: result.message, data: result.data };
+    }
+    case "open-popup": {
+      if (!browser.openPopup) return unsupported("Popup testing");
+      const popupPath = parsed?.payload?.popupPath;
+      if (!isSafePopupPath(popupPath)) {
+        return { ok: false, status, message: "Popup path is invalid." };
+      }
+      const result = await browser.openPopup(popupPath);
+      return { ok: result.ok, status, message: result.message, data: result.data };
+    }
+    case "close-popup": {
+      if (!browser.closePopup) return unsupported("Popup testing");
+      const result = await browser.closePopup();
+      return { ok: result.ok, status, message: result.message };
+    }
+    case "get-url": {
+      const url = await browser.getPageUrl();
+      return { ok: true, status, data: { url } };
+    }
+    case "inspect-at": {
+      // Phase 12: bounded element inspection. Coordinates are validated here
+      // AND inside the adapter; the inspection script is fixed, so no
+      // client-supplied code ever executes.
+      if (!browser.inspectAt) return unsupported("Element inspection");
+      const x = Math.round(Number(parsed?.payload?.x));
+      const y = Math.round(Number(parsed?.payload?.y));
+      const target = parsed?.payload?.target === "popup" ? "popup" : "page";
+      if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x > 4096 || y > 4096) {
+        return { ok: false, status, message: "Inspection coordinates are out of range." };
+      }
+      const result = await browser.inspectAt(x, y, target);
+      return { ok: result.ok, status, message: result.message, data: result.data };
+    }
+    case "restart-browser": {
+      if (!browser.restartBrowser) return unsupported("Browser restart");
+      const result = await browser.restartBrowser();
+      return { ok: result.ok, status, message: result.message, data: result.data };
+    }
+    case "clear-state": {
+      if (!browser.clearBrowserState) return unsupported("Browser state reset");
+      const result = await browser.clearBrowserState();
+      return { ok: result.ok, status, message: result.message };
+    }
     case "reload":
       await browser.reload();
       return { ok: true, status };
-    case "restart-extension":
+    case "restart-extension": {
+      if (browser.restartExtension) {
+        const result = await browser.restartExtension();
+        return { ok: result.ok, status, message: result.message };
+      }
       if (browserId === "firefox") {
         // Temporary add-ons cannot be restarted in place in this runtime;
         // report the limitation honestly instead of pretending to restart.
@@ -176,6 +381,7 @@ async function handleCommand(body: unknown): Promise<{ ok: boolean; status: stri
       events.emit({ type: "extension", level: "info", source: "extension", message: "Extension restart requested." });
       await browser.reload();
       return { ok: true, status };
+    }
     case "clear-console":
       events.emit({ type: "sandbox", level: "info", source: "runner", message: "Console cleared." });
       return { ok: true, status };
@@ -244,10 +450,14 @@ const server = createServer((request, response) => {
   }
 
   if (request.method === "GET" && url.pathname === "/screenshot") {
+    const target = url.searchParams.get("target") === "popup" ? "popup" : "page";
     void (async () => {
-      const png = await browser.captureScreenshot();
+      const png =
+        target === "popup" && browser.capturePopupScreenshot
+          ? await browser.capturePopupScreenshot()
+          : await browser.captureScreenshot();
       if (!png) {
-        sendJson(response, 409, { error: "Screenshot not ready." });
+        sendJson(response, 409, { error: target === "popup" ? "Popup screenshot not available." : "Screenshot not ready." });
         return;
       }
       response.writeHead(200, {

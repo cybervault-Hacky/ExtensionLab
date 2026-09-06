@@ -26,6 +26,9 @@ they cannot drift apart.
 | Browser concurrency | 1 | 2 | 3 |
 | Regression testing / baselines (Phase 9) | – | ✓ | ✓ |
 | Advanced test suites — `service-worker`, `permission-smoke` (Phase 9) | – | ✓ | ✓ |
+| Interactive browser sessions per period (Phase 11) | 5 | 60 | 300 |
+| Interactive browser: concurrent live sessions | 1 | 2 | 4 |
+| Interactive browser: max session length | 10 min | 30 min | 60 min |
 
 "Period" is the calendar month for Free users and the **subscription billing
 period** (`currentPeriodStart` → `currentPeriodEnd`) for paid users; usage
@@ -186,6 +189,16 @@ from then on, and the next cleanup uses the owner's *current* plan.
 - Upgrading applies immediately (the next request sees the new limits);
   downgrading applies at the boundary the provider reports.
 
+## Interactive browser notes (Phase 11)
+
+Interactive sessions reuse the same reserve → consume → release accounting as
+test runs: the per-period unit is **reserved** at session creation, **consumed**
+when the browser actually reaches READY, and **released** when a session is
+stopped before it started. Capacity (concurrent live sessions) is queue
+backpressure, not a quota: an over-capacity start stays QUEUED and retries as
+slots free. The hard lifetime ceiling never moves for keepalives. Deployment
+caps (`INTERACTIVE_BROWSER_MAX_GLOBAL` / `_PER_ORG`) apply above plan limits.
+
 ## Adding or changing a plan
 
 Do not add a fourth plan; annual billing would be a second `price` on the same
@@ -204,3 +217,25 @@ exactly like personal plans; concurrency is finally clamped by
 `ORG_MAX_CONCURRENCY`. Seat counts are provisioned values — billing changes
 them through the provider abstraction, and where a provider cannot update
 seats automatically an operator applies the change (documented limitation).
+
+
+## Phase 14: direct purchase (Razorpay)
+
+Paid plans are directly purchasable when Razorpay (or Stripe) is configured —
+the pricing page shows **Buy Now**, never "Contact Us", for purchasable
+plans. Prices come from the same catalog that enforces quotas; the Razorpay
+plan mapping (`RAZORPAY_PLAN_ID_*`) must match the catalog amount or checkout
+fails closed with `PAYMENT_MISMATCH`. Entitlements activate automatically on
+verified payment — no approval step. Cancel keeps paid access until the
+period ends; downgrades/expiry never delete data. See
+[RAZORPAY.md](RAZORPAY.md).
+
+## Phase 15 notes (Test Automation Studio)
+
+Studio usage draws on existing entitlements — no new limit categories:
+saved-test runs consume `test_run` quota exactly like built-in suite runs;
+cross-browser saved tests require the cross-browser entitlement; browsers per
+matrix run and per-user concurrency follow the table above; artifact
+retention governs run evidence while test **definitions** are retained
+independently and never expire with runs. API-key (CI) runs are subject to
+the same reservations — API users never bypass plan limits.

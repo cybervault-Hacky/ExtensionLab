@@ -68,3 +68,13 @@ export function listSnapshots(extensionId: string, limit = 20): AnalysisSnapshot
     )
     .all(extensionId, limit) as unknown as AnalysisSnapshotRow[];
 }
+
+/** Phase 11: the analysis recorded for one exact package (immutable evidence). */
+export function getSnapshotByPackageId(packageId: string): AnalysisSnapshotRow | null {
+  const db = getDb();
+  return (
+    (db
+      .prepare(`SELECT * FROM analysis_snapshots WHERE package_id = ? ORDER BY created_at DESC LIMIT 1`)
+      .get(packageId) as AnalysisSnapshotRow | undefined) ?? null
+  );
+}

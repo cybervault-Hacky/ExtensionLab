@@ -29,6 +29,9 @@ export function middleware(request: NextRequest) {
     nonce,
     development: process.env.NODE_ENV === "development",
     upgradeInsecureRequests: process.env.NODE_ENV === "production" && request.nextUrl.protocol === "https:",
+    // Phase 14: Razorpay Standard Checkout origins. Inlined at build time
+    // (Edge middleware); see lib/security/csp.ts and docs/RAZORPAY.md.
+    razorpayCheckout: process.env.BILLING_PROVIDER === "razorpay" || process.env.CSP_RAZORPAY === "1",
   });
 
   const incomingRequestId = request.headers.get("x-request-id");

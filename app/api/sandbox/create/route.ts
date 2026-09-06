@@ -10,7 +10,7 @@ import { apiErrorResponse, assertEntitled, requireApiUser, requireSameOrigin } f
 import { canUploadPackage } from "@/lib/billing/entitlements";
 import { getSandboxManager } from "@/lib/runtime/sandbox-manager-instance";
 import { MAX_EXTENSION_SIZE } from "@/lib/extension/limits";
-import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
+import { enforceRateLimitAsync } from "@/lib/auth/rate-limit-policy";
 import { rateLimited } from "@/lib/auth/api";
 import type { CreateSandboxResponse } from "@/types/runtime";
 
@@ -26,7 +26,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     requireSameOrigin(request);
     const user = requireApiUser(request);
-    const limit = enforceRateLimit("sandboxCreate", `${user.id}:${getClientIp(request)}`);
+    const limit = await enforceRateLimitAsync("sandboxCreate", `${user.id}:${getClientIp(request)}`);
     if (!limit.ok) throw rateLimited(limit.retryAfterSeconds);
     const contentType = request.headers.get("content-type") ?? "";
     if (!contentType.includes("multipart/form-data")) {

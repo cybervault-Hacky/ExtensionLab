@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
+import { enforceRateLimitAsync } from "@/lib/auth/rate-limit-policy";
 import { isBillingEnabled } from "@/lib/billing/provider";
 import { BillingError } from "@/lib/billing/errors";
 import { processProviderEvent, verifyWebhookRequest } from "@/lib/billing/webhooks";
@@ -30,7 +30,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!isBillingEnabled()) {
     return NextResponse.json({ error: { errorCode: "BILLING_NOT_CONFIGURED", requestId } }, { status: 404, headers });
   }
-  const limit = enforceRateLimit("billingWebhook", getClientIp(request));
+  const limit = await enforceRateLimitAsync("billingWebhook", getClientIp(request));
   if (!limit.ok) {
     recordMetric("billing.webhook_rate_limited", 1);
     return NextResponse.json({ error: { errorCode: "RATE_LIMITED", requestId } }, { status: 429, headers: { ...headers, "retry-after": String(limit.retryAfterSeconds) } });

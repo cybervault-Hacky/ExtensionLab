@@ -264,5 +264,95 @@ Organizations add a second ownership axis. The guarantees:
    config-gated, strongly authorized and audited, and executes no shell or
    Docker commands.
 
+## Interactive browser (Phase 11)
+
+The interactive browser runs the user's uploaded extension — untrusted code —
+in a disposable container and lets the user drive it. The added boundary:
+
+- **Exact package binding.** Sessions bind package id + version + SHA-256;
+  start and reload re-verify the hash from stored bytes and fail closed
+  (`package_unavailable` / `package_hash_mismatch`). No substitution.
+- **No raw browser channels.** No CDP/shell/eval/flags, no Docker socket, no
+  host mounts, no privileged or host-network containers. One token-guarded
+  loopback control port (the Phase 3 runner protocol) is the only door.
+- **Typed input allowlist, enforced twice.** Pointer/click/typing/key/scroll
+  actions only, with viewport-bounded coordinates, length caps, an allowed-key
+  list, payload size cap and per-session rate limit — validated on the web
+  tier and again inside the container.
+- **URL policy.** Navigation reuses the Phase 3 SSRF guard (schemes,
+  credentials, private/loopback/link-local literals, DNS-rebinding pinning).
+- **Frames, not video.** The browser is visible only as rate/size-limited PNG
+  frames served `private, no-store` + `nosniff` + CSP `sandbox`. The popup
+  renders inside the container and is never extracted into the web app.
+- **Tenant isolation and leak regression.** Cross-tenant access is 404 on
+  every route; session/artifact views are asserted (by test) to contain no
+  runtime internals (container ids, ports, tokens, temp paths).
+- **Hard limits.** Max lifetime cannot be extended by keepalives; idle →
+  IDLE → EXPIRED with visible reasons; every termination path removes the
+  container and the extracted package (asserted by unit and e2e suites).
+
 Security docs describe a system *designed to support* these properties; they
 make no certification claims.
+
+## Phase 13 security additions
+
+- **Post-redirect URL re-validation** (§33): interactive navigation validates
+  the URL (SSRF/DNS-rebinding/metadata protections) **before** `open-url` and
+  re-validates the **effective URL read back from the runner afterwards**; a
+  redirect onto a private/loopback/metadata address is blocked and recorded.
+- **Reconciliation safety**: orphaned containers are matched by
+  ExtensionLab-owned labels (`extensionlab.environment` must match, owner must
+  be `interactive`) — a shared Docker daemon's foreign containers are never
+  deleted.
+- **Admin surface stays high-level**: workers/capacity/failures/metrics/
+  reconcile views plus drain/disable actions only — no shell, `docker exec`,
+  raw CDP or arbitrary browser commands.
+- **Worker trust boundary**: workers never trust client-provided paths,
+  container IDs or flags; the resource profile and image identity are
+  server-side decisions; the untrusted extension stays inside the sandbox.
+
+
+## Phase 14: payment security
+
+- **No card data**: Razorpay Checkout handles payment instruments inside its
+  own iframe; ExtensionLab stores only provider ids, plan, integer amounts
+  and statuses. There are no card/CVV fields anywhere in the schema.
+- **Client confirms nothing**: `POST /api/billing/checkout` accepts only a
+  plan id; prices resolve server-side from the catalog. The checkout relay
+  from the browser is HMAC-verified server-side before anything else, and a
+  valid relay still only triggers a provider lookup for the truth.
+  Entitlements change exclusively via verified provider state.
+- **Webhook authenticity**: `x-razorpay-signature` (HMAC-SHA256) is verified
+  over the exact raw body before parsing; the shared endpoint never trusts an
+  unverified payload regardless of source.
+- **User binding**: checkouts, confirmations and subscriptions are owned by
+  the authenticated user; one user can never confirm or activate another
+  user's checkout (`getOwnedCheckoutRecord`).
+- **Secrets**: `RAZORPAY_KEY_SECRET` / `RAZORPAY_WEBHOOK_SECRET` are
+  server-only and excluded from `describeConfig()`, API responses, logs,
+  error messages and the client bundle (build-time audit in the Phase 14
+  verification run). Only the public key id reaches the browser.
+
+## Phase 15 additions — Test Automation Studio
+
+- **Definitions are data, never code**: saved tests accept only the Phase 4
+  action/assertion allowlists, bounded fields and the existing safe selector
+  grammar (`validateSelector`). `execute_js`/`evaluate`/`run_shell`/`raw_cdp`/
+  `docker_exec`-style content is rejected at save, import and again in the
+  engine (`isSafeAction`).
+- **Variables never execute**: typed (`text`/`number`/`url`/`boolean`),
+  length-bounded, resolved by pure server-side substitution; URLs restricted
+  to http/https. Secrets are not implemented — no encrypted variable storage
+  exists, and passwords must never be stored as variables.
+- **Exact package binding**: runs refuse packages whose SHA-256 no longer
+  matches the saved test (`CONFLICT`, never silent substitution).
+- **Tenancy**: every saved-test/suite/baseline read is owner- or
+  organization-scoped; cross-tenant access is impossible (covered by
+  `tests/phase15`).
+- **Import is untrusted input**: size-bounded, strict schema, unknown-field
+  rejection, full re-validation, always a fresh DRAFT; atomic rejection.
+- **CI uses the existing auth stack**: API keys with `tests:read`/`tests:write`
+  (already in the scope catalog), organization scoping, rate limits and quota
+  reservation — no parallel auth path and no plan bypass.
+- **AI remains advisory**: failure analysis never executes code, modifies
+  tests, touches secrets or decides regression status.

@@ -3,6 +3,7 @@ import { getConfig } from "@/lib/config/env";
 import { BillingError } from "./errors";
 import type { BillingProvider } from "./types";
 import { createStripeProvider } from "./providers/stripe";
+import { createRazorpayProvider } from "./providers/razorpay";
 import { createFakeProvider, type FakeBillingProvider } from "./providers/fake";
 
 /**
@@ -11,6 +12,7 @@ import { createFakeProvider, type FakeBillingProvider } from "./providers/fake";
  * configuration:
  *
  *   BILLING_PROVIDER=stripe   → real Stripe adapter (keys required)
+ *   BILLING_PROVIDER=razorpay → Razorpay adapter (Phase 14; keys required)
  *   BILLING_PROVIDER=fake     → in-memory fake (rejected in production)
  *   BILLING_PROVIDER=disabled → billing endpoints answer BILLING_NOT_CONFIGURED;
  *                               everyone is on the Free plan
@@ -38,6 +40,16 @@ export function getBillingProvider(): BillingProvider {
       if (!billing.secretKey || !billing.webhookSecret) throw new BillingError("BILLING_NOT_CONFIGURED");
       provider = createStripeProvider({ secretKey: billing.secretKey, webhookSecret: billing.webhookSecret });
       break;
+    case "razorpay": {
+      const razorpay = billing.razorpay;
+      if (!razorpay.keyId || !razorpay.keySecret || !razorpay.webhookSecret) throw new BillingError("BILLING_NOT_CONFIGURED");
+      provider = createRazorpayProvider({
+        keyId: razorpay.keyId,
+        keySecret: razorpay.keySecret,
+        webhookSecret: razorpay.webhookSecret,
+      });
+      break;
+    }
     case "fake":
       if (config.appEnv === "production") throw new BillingError("BILLING_NOT_CONFIGURED");
       provider = createFakeProvider({ webhookSecret: billing.fakeWebhookSecret ?? billing.webhookSecret ?? FAKE_WEBHOOK_SECRET_FALLBACK });

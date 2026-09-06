@@ -342,3 +342,104 @@ database, the filesystem or the test engine.
 
 Uploaded code remains untrusted data executed only in disposable containers;
 none of the new surfaces change that boundary.
+
+## Phase 11 additions — Interactive browser
+
+- **Interactive sessions** (`lib/interactive`, `interactive_browser_sessions`
+  table, migration 007): a `InteractiveBrowserSession` row binds one uploaded
+  package *version* by id + SHA-256 and walks
+  `CREATED → QUEUED → STARTING → READY → ACTIVE/IDLE → terminal`. Every
+  terminal state records a stop reason. See
+  [docs/INTERACTIVE_BROWSER.md](INTERACTIVE_BROWSER.md).
+- **Runtime reuse, not duplication**: start/stop/cleanup are job types on the
+  Phase 6 queue (`INTERACTIVE_BROWSER_START/STOP/CLEANUP`) executing against
+  the Phase 3 Docker driver and the Phase 9 Chromium adapter. The container
+  speaks the same token-guarded loopback runner protocol; the session hub
+  (`lib/interactive/runtime.ts`) bridges it to the web tier — one SSE
+  attachment per live session, bounded console/network/event rings, frame and
+  input rate limits with backpressure.
+- **API surface** (`app/api/browser-sessions`): create/start/stop, navigation
+  through the Phase 3 SSRF guard, typed allowlisted input, popup open/close
+  (rendered in-container), extension reload (re-verified binding), SSE event
+  stream with snapshot replay, PNG frame transport, screenshot artifacts with
+  retention, console/network rings, viewport, rate-limited keepalive.
+- **Entitlements reuse Phase 7**: plan gate (402), per-period session units
+  (429), per-user/org/global concurrency as retryable queue backpressure
+  (slots count only container-holding sessions, so an oversubscribed queue
+  drains instead of deadlocking).
+- **UI** (`/dashboard/browser/[sessionId]`): browser chrome + Console /
+  Network / Extension / Events / Screenshots panels over SSE + frames; entry
+  points on the extension detail and test-report pages appear only when a
+  stored package exists.
+
+## Phase 13 components
+
+- `lib/jobs/worker-registry.ts` — worker registration, heartbeats, derived
+  state, fleet summary (migration 009).
+- `lib/runtime/profiles.ts` / `docker-driver.ts` — server-controlled resource
+  profiles; hardened `docker create` args; ownership labels
+  (`extensionlab.owner`, `extensionlab.session`) and container listing for
+  reconciliation.
+- `lib/runtime/breaker.ts` — deterministic start circuit breaker.
+- `lib/storage/s3.ts` — S3-compatible provider behind the existing
+  `StorageProvider` interface (metadata stays in the DB).
+- `lib/observability/metrics-registry.ts`, `failure-class.ts` — metric
+  snapshot + 13-class failure taxonomy over the error catalog.
+- `lib/admin/capacity.ts` — queue/slot/failure rollups for the admin API.
+- Coordination store: optional `publish`/`subscribe` for cross-instance SSE
+  frames (memory bus in-process; Redis pub/sub in fleets).
+- No second queue, browser manager, artifact system or billing path — the
+  above extend the Phase 3–12 components in place.
+
+
+## Phase 14 component: Razorpay adapter
+
+`lib/billing/providers/razorpay.ts` — the only place Razorpay's API,
+encoding, statuses and event names appear. Implements the existing
+`BillingProvider` interface (plus `rebuildCheckoutSession` for providers
+without idempotent create, and `verifyCheckoutConfirmation` for the relayed
+checkout signature). Subscriptions map onto Razorpay subscription objects on
+configured Razorpay plans; statuses normalize in the adapter
+(`created→incomplete`, `authenticated/active→active`, `pending→past_due`,
+`halted→unpaid`, `cancelled→canceled`, `expired→incomplete_expired`).
+`billing_payments` (migration 011) is the idempotent payments ledger written
+only from verified events. Everything else — entitlement service, quotas,
+plan catalog, webhook ledger, audit — is reused unchanged.
+
+
+## Phase 15 components — Test Automation Studio
+
+- `lib/testing/saved-test-schema.ts` — the saved-test definition schema
+  (versioned, `schemaVersion: 1`): centralized limits, the exact action and
+  assertion allowlists, selector validation via the existing
+  `validateSelector`, variable typing/resolution (pure substitution, never
+  evaluation) and strict unknown-field rejection. Guards save, import and
+  execution.
+- `lib/testing/studio-service.ts` — the business core: lifecycle
+  (DRAFT → ACTIVE → ARCHIVED), immutable versioning, duplicate-as-new-identity,
+  optimistic concurrency (`expectedVersion`), exact package SHA-256 binding,
+  suite construction (deterministic order, backwards-only dependencies,
+  stop/continue failure policy, same-package members), import/export and
+  baseline save/compare. Routes contain no business logic.
+- `lib/testing/studio-baseline.ts` — deterministic regression classification
+  (`NEW_FAILURE` / `FIXED_FAILURE` / `UNCHANGED_FAILURE` / `NEW_WARNING` /
+  `PERFORMANCE_REGRESSION` / `NO_REGRESSION`) as a pure function plus the
+  `saved_test_baselines` storage. Screenshot diffing is intentionally not
+  implemented.
+- `lib/db/repositories/saved-tests.ts` — `saved_tests`, `saved_test_versions`,
+  `saved_test_suites(_items)`, analytics and deterministic flaky detection.
+- Engine extensions (no second engine): `TestCaseInput.cleanupSteps` (cleanup
+  runs after assertions; failures are warnings, never failures),
+  `TestRunCreateInput.stopOnFailure` (suite failure policy: remaining tests are
+  explicitly skipped), and `AUTOMATED_TEST.payload.savedTest` — a prepared,
+  validated, variable-resolved definition the worker rebuilds into `TestCase`s
+  via `savedTestsAsTestCases` (deterministic ids `saved_<id>_v<n>`).
+- `test_runs.saved_test_id` / `saved_test_version` bind each run to the exact
+  test version it executed; historical runs stay immutable when definitions
+  are edited.
+- CI surface: `/api/v1/tests/:testId/runs` (+ `/:runId`) using the existing
+  `withApiKey`/`withIdempotency` stack and the existing `test_run.*` webhook
+  events. `lib/api/v1-tests-support.ts` maps internal states onto the CI enum
+  (QUEUED/STARTING/RUNNING/COMPLETED/FAILED/TIMEOUT/CANCELLED) with honest
+  exit codes (0 only on COMPLETED).
+- Migration `012_phase15_test_studio.sql`.

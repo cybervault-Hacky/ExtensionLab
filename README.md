@@ -700,6 +700,8 @@ Upload → Validate → Store package → Queue job → Worker → Docker sandbo
 - `docs/OPERATIONS.md` — runbooks: worker, cleanup, E2E, troubleshooting.
 - `docs/BROWSERS.md` — multi-browser platform: runtimes, capabilities,
   matrices, comparison, baselines and regression.
+- `docs/INTERACTIVE_BROWSER.md` — Phase 11 interactive extension browser:
+  lifecycle, exact package binding, security model, API, jobs and recovery.
 
 ## Phase 7: Plans, Billing & Entitlements
 
@@ -826,7 +828,50 @@ Documentation: `docs/ORGANIZATIONS.md`, `docs/API.md`, `docs/API_KEYS.md`,
 `docs/WEBHOOKS.md`, `docs/ENTERPRISE.md`, `docs/SSO.md` (plus updates to
 SECURITY, DEPLOYMENT, OPERATIONS, ARCHITECTURE and PLANS).
 
+## Phase 11 — Interactive extension browser
+
+Load your uploaded extension package — the exact bytes, hash-verified — into a
+disposable isolated Chromium and drive it from the web workspace at
+`/dashboard/browser/[sessionId]`: browser chrome (back/forward/reload/address
+bar), typed pointer/keyboard/scroll input, the extension's real popup rendered
+inside the container, and Console / Network / Extension / Events / Screenshots
+panels over a live SSE stream. Sessions are hard-lifetime limited with idle
+expiry and visible stop reasons; concurrency and per-period quotas reuse the
+Phase 7 entitlements; start/stop/cleanup run as jobs on the Phase 6 queue
+against the Phase 3/9 Docker runtime. The uploaded extension stays untrusted:
+typed allowlisted input only (validated twice), navigation behind the Phase 3
+SSRF guard, PNG frames instead of video, no CDP/shell/flags/Docker socket, and
+every termination path removes the container and the extracted package.
+Chromium is offered today; Edge and Firefox arrive with the supported runtime.
+
+Documentation: `docs/INTERACTIVE_BROWSER.md` (plus updates to SECURITY,
+DEPLOYMENT, OPERATIONS, ARCHITECTURE, PLANS and `.env.example`).
+
 ## License
 
 Not yet specified. The repository is currently configured for private or
 internal use.
+
+
+## Test Automation Studio (Phase 15)
+
+Build repeatable extension tests **without writing JavaScript, shell commands
+or browser automation code** at `/dashboard/tests/studio`: compose Setup /
+Actions / Assertions / Cleanup from the exact engine allowlist, get selector
+assistance restricted to safe strategies, define typed bounded variables
+(secrets deliberately not supported), and save versioned tests (v1, v2, …)
+bound to the exact package SHA-256. Run them manually or from CI via
+`POST /api/v1/tests/:testId/runs` using existing API keys — with immutable
+run history, deterministic baselines/regression classification, suites with
+explicit dependencies and stop/continue failure policy, honest CI exit codes
+and real-browser execution only (never faked). Details:
+[docs/TEST_AUTOMATION_STUDIO.md](docs/TEST_AUTOMATION_STUDIO.md) and
+[docs/CI_CD.md](docs/CI_CD.md).
+
+## Billing (Phase 14)
+
+Self-serve subscriptions with Razorpay: pick a plan on `/pricing`, click
+**Buy Now**, pay in Razorpay's secure checkout, and your plan activates
+automatically — server-verified payment + webhook confirmation, no manual
+approval. Cards never touch ExtensionLab; cancel any time (paid access runs
+to the period end). Setup: [docs/RAZORPAY.md](docs/RAZORPAY.md).

@@ -178,6 +178,13 @@ export interface TestCaseInput {
    * tests in the same suite; cycles and long chains are rejected at build time.
    */
   dependsOn?: string[];
+  /**
+   * Phase 15: cleanup steps run after assertions regardless of outcome (also
+   * on failure) so a test never leaves the page in a dirty state. They use
+   * the same allowlist + safety gates as regular steps; cleanup failures are
+   * recorded as warnings and never flip a passing test to failed.
+   */
+  cleanupSteps?: TestAction[];
 }
 
 export interface TestCase extends Omit<TestCaseInput, "applicable"> {

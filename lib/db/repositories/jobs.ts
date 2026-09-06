@@ -18,6 +18,9 @@ export const JOB_TYPES = [
   "EMAIL",
   "WEBHOOK_DELIVERY",
   "ORG_EXPORT",
+  "INTERACTIVE_BROWSER_START",
+  "INTERACTIVE_BROWSER_STOP",
+  "INTERACTIVE_BROWSER_CLEANUP",
 ] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 

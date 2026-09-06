@@ -52,30 +52,47 @@ const applied = new Set(
 const dir = join(root, "lib", "db", "migrations");
 const files = readdirSync(dir).filter((name) => name.endsWith(".sql")).sort();
 
+// Phase 13 § migration locking: hold the database write lock (BEGIN IMMEDIATE)
+// for the whole run so concurrent migration runners serialize instead of
+// racing on `applied` bookkeeping. busy_timeout (set above) bounds the wait;
+// a second runner either waits, then sees every file applied, or fails loudly.
 let pending = 0;
-for (const file of files) {
-  if (applied.has(file)) {
-    console.log(`already applied ${file}`);
-    continue;
-  }
-  pending += 1;
-  if (dryRun) {
-    console.log(`pending ${file}`);
-    continue;
-  }
-  const sql = readFileSync(join(dir, file), "utf8");
-  db.exec("BEGIN");
-  try {
+let holdingRunLock = false;
+if (!dryRun) {
+  db.exec("BEGIN IMMEDIATE");
+  holdingRunLock = true;
+}
+try {
+  for (const file of files) {
+    if (applied.has(file)) {
+      console.log(`already applied ${file}`);
+      continue;
+    }
+    pending += 1;
+    if (dryRun) {
+      console.log(`pending ${file}`);
+      continue;
+    }
+    const sql = readFileSync(join(dir, file), "utf8");
     db.exec(sql);
     db.prepare("INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)").run(file, Date.now());
-    db.exec("COMMIT");
     console.log(`applied ${file}`);
-  } catch (error) {
-    db.exec("ROLLBACK");
-    console.error(`failed ${file}: ${error instanceof Error ? error.message : String(error)}`);
-    db.close();
-    process.exit(1);
   }
+  if (holdingRunLock) {
+    db.exec("COMMIT");
+    holdingRunLock = false;
+  }
+} catch (error) {
+  if (holdingRunLock) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // Connection is closing; the transaction is discarded either way.
+    }
+  }
+  console.error(`migration failed: ${error instanceof Error ? error.message : String(error)}`);
+  db.close();
+  process.exit(1);
 }
 
 db.close();

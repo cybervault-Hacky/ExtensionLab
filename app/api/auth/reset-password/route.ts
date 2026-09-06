@@ -7,7 +7,7 @@ import { updateUserPassword } from "@/lib/db/repositories/users";
 import { deleteAllSessionsForUser } from "@/lib/db/repositories/sessions";
 import { recordAuditEvent } from "@/lib/db/repositories/audit";
 import { ApiError, apiErrorResponse, badRequest, rateLimited, requireSameOrigin } from "@/lib/auth/api";
-import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
+import { enforceRateLimitAsync } from "@/lib/auth/rate-limit-policy";
 import { getClientIp } from "@/lib/runtime/api-helpers";
 import { hashToken } from "@/lib/auth/tokens";
 
@@ -18,7 +18,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     requireSameOrigin(request);
     const ip = getClientIp(request);
-    const limit = enforceRateLimit("resetPassword", ip);
+    const limit = await enforceRateLimitAsync("resetPassword", ip);
     if (!limit.ok) throw rateLimited(limit.retryAfterSeconds);
 
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;

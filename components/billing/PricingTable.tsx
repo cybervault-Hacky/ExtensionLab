@@ -3,7 +3,15 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { PlanCard } from "./PlanCard";
+import { openRazorpayCheckout } from "./RazorpayCheckout";
 import type { ApiErrorPayload, PlanComparisonRow, PlanView } from "./types";
+
+interface CheckoutApiResponse {
+  url: string;
+  reused: boolean;
+  /** Present for popup providers (Razorpay): safe, public checkout configuration. */
+  checkout?: { provider: "razorpay"; keyId: string; subscriptionId: string; planName: string; currency: string; amount: number | null };
+}
 
 interface PricingTableProps {
   plans: PlanView[];
@@ -17,6 +25,7 @@ interface PricingTableProps {
 export function PricingTable({ plans, comparison, billingEnabled, signedIn, currentPlanId }: PricingTableProps) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
   const [error, setError] = useState<{ message: string; referenceId?: string } | null>(null);
 
   const choose = async (plan: PlanView) => {
@@ -45,8 +54,30 @@ export function PricingTable({ plans, comparison, billingEnabled, signedIn, curr
         setError({ message: body?.error?.message ?? "Checkout could not be started.", referenceId: body?.error?.referenceId });
         return;
       }
-      const { url } = (await response.json()) as { url: string };
-      window.location.assign(url);
+      const data = (await response.json()) as CheckoutApiResponse;
+      if (data.checkout?.provider === "razorpay") {
+        // Phase 14: popup checkout. The relayed confirmation is verified by
+        // the server on the return flow; the browser trusts nothing.
+        setOpening(true);
+        const outcome = await openRazorpayCheckout({
+          keyId: data.checkout.keyId,
+          subscriptionId: data.checkout.subscriptionId,
+          planName: plan.name,
+          currency: data.checkout.currency,
+        });
+        setOpening(false);
+        if (outcome.kind === "script-error") {
+          setError({ message: "The secure payment window could not be opened. Check your connection and try again." });
+          return;
+        }
+        if (outcome.kind === "dismissed") {
+          router.push("/dashboard/billing?checkout=cancelled");
+          return;
+        }
+        router.push(`/dashboard/billing/return?session_id=${encodeURIComponent(outcome.response.razorpay_subscription_id ?? data.checkout.subscriptionId)}&payment_id=${encodeURIComponent(outcome.response.razorpay_payment_id)}&signature=${encodeURIComponent(outcome.response.razorpay_signature)}`);
+        return;
+      }
+      window.location.assign(data.url);
     } finally {
       setBusy(null);
     }
@@ -70,10 +101,10 @@ export function PricingTable({ plans, comparison, billingEnabled, signedIn, curr
                   : plan.id === "free"
                     ? { label: signedIn ? "Go to dashboard" : "Start for free", onClick: () => void choose(plan), variant: "secondary" }
                     : purchasable
-                      ? { label: signedIn ? `Upgrade to ${plan.name}` : `Get ${plan.name}`, onClick: () => void choose(plan), loading: busy === plan.id, disabled: busy !== null }
-                      : { label: "Contact us", href: "mailto:hello@extensionlab.dev", variant: "secondary" }
+                      ? { label: signedIn ? `Buy ${plan.name}` : `Get ${plan.name}`, onClick: () => void choose(plan), loading: busy === plan.id || opening, disabled: busy !== null || opening }
+                      : { label: "Not yet available", disabled: true, variant: "secondary" }
               }
-              footnote={plan.id !== "free" && purchasable ? "Billed monthly. Cancel any time." : plan.id !== "free" ? "Not yet available for self-serve checkout." : null}
+              footnote={plan.id !== "free" && purchasable ? "Secure checkout via Razorpay. Billed monthly, cancel any time." : plan.id !== "free" ? "Self-serve checkout is not configured on this deployment." : null}
             />
           );
         })}

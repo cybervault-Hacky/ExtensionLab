@@ -9,7 +9,7 @@ import {
   requireSameOrigin,
 } from "@/lib/auth/api";
 import { getClientIp } from "@/lib/runtime/api-helpers";
-import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
+import { enforceRateLimitAsync } from "@/lib/auth/rate-limit-policy";
 import { canAnalyze } from "@/lib/billing/entitlements";
 import { recordUsage } from "@/lib/db/repositories/usage";
 import {
@@ -73,7 +73,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     requireSameOrigin(request);
     const user = requireApiUser(request);
     const ip = getClientIp(request);
-    const authLimit = enforceRateLimit("upload", `${user.id}:${ip}`);
+    const authLimit = await enforceRateLimitAsync("upload", `${user.id}:${ip}`);
     if (!authLimit.ok) throw new ApiError(429, "rate_limited", "Too many analyses. Please wait and try again.");
 
     // Entitlement check first: an invalid payload below never consumes usage.

@@ -3,10 +3,11 @@ import { generateDbId } from "../ids";
 import type { UsageEventRow } from "../schema/types";
 
 /**
- * Metered usage kinds. `ai_request` (Phase 8) counts AI assistance calls; it
- * shares the reservation/consume/release lifecycle of the other kinds.
+ * Metered usage kinds. `ai_request` (Phase 8) counts AI assistance calls;
+ * `interactive_browser` (Phase 11) counts started interactive browser sessions.
+ * They share the reservation/consume/release lifecycle of the other kinds.
  */
-export type UsageKind = "analysis" | "test_run" | "ai_request";
+export type UsageKind = "analysis" | "test_run" | "ai_request" | "interactive_browser";
 
 export function recordUsage(userId: string, kind: UsageKind, at: number = Date.now()): void {
   const db = getDb();

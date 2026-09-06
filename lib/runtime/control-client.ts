@@ -16,6 +16,7 @@ export interface ControlCommand {
   ok: boolean;
   status: string;
   message?: string;
+  data?: Record<string, unknown>;
 }
 
 export class ControlClient {
@@ -167,6 +168,26 @@ export class ControlClient {
     if (!response.ok) return null;
     return new Uint8Array(await response.arrayBuffer());
   }
+
+  /**
+   * Phase 11: frame capture for a specific target ("page" or "popup"). The
+   * runner renders both; the host only chooses between two allowlisted names.
+   */
+  async screenshotForTarget(
+    token: string,
+    target: "page" | "popup",
+    timeoutMs = 6000,
+  ): Promise<Uint8Array | null> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const response = await fetch(`${this.baseUrl()}/screenshot?target=${target}`, {
+      headers: { "x-sandbox-token": token },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!response.ok) return null;
+    return new Uint8Array(await response.arrayBuffer());
+  }
 }
 
 function isSafeRuntimeEvent(event: RuntimeEvent): boolean {
@@ -190,3 +211,5 @@ function sanitizeRuntimeEvent(event: RuntimeEvent): RuntimeEvent {
     metadata: event.metadata ?? undefined,
   };
 }
+
+export { isSafeRuntimeEvent, sanitizeRuntimeEvent };

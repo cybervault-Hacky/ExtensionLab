@@ -3,8 +3,10 @@ import { createHash } from "node:crypto";
 import { getConfig } from "@/lib/config/env";
 import {
   createCheckoutRecord,
+  findRecentOpenCheckout,
   getBillingCustomer,
   getOwnedCheckoutRecord,
+  listPaymentsForUser,
   updateCheckoutStatus,
   upsertBillingCustomer,
 } from "@/lib/db/repositories/billing";
@@ -25,6 +27,14 @@ import type { BillingStateKind, PlanId, ProviderInvoice } from "./types";
  */
 
 const CHECKOUT_REUSE_WINDOW_MS = 10 * 60 * 1000;
+
+/**
+ * Phase 14 §91: same-process double clicks for the same (user, plan) join on
+ * one in-flight checkout instead of racing the provider. Cross-instance races
+ * are narrowed by the reuse window below; a lost race leaves an unpaid,
+ * never-activated provider subscription that expires harmlessly.
+ */
+const inFlightCheckouts = new Map<string, Promise<CheckoutResult>>();
 
 // ---------------------------------------------------------------------------
 // State view (safe for the browser)
@@ -53,6 +63,8 @@ export interface BillingStateView {
     testRuns: { used: number; reserved: number; limit: number; remaining: number; resetAt: number };
     aiRequests: { used: number; reserved: number; limit: number; remaining: number; resetAt: number };
   };
+  /** Phase 14: normalized payment history from verified events (no instrument data). */
+  payments: Array<{ id: string; planId: string; amount: number; currency: string; status: string; createdAt: number }>;
   plans: PlanView[];
 }
 
@@ -78,6 +90,14 @@ export function buildBillingState(userId: string, now = Date.now()): BillingStat
       testRuns: { used: testRuns.used, reserved: testRuns.reserved, limit: testRuns.limit, remaining: testRuns.remaining, resetAt: testRuns.resetAt },
       aiRequests: { used: aiRequests.used, reserved: aiRequests.reserved, limit: aiRequests.limit, remaining: aiRequests.remaining, resetAt: aiRequests.resetAt },
     },
+    payments: listPaymentsForUser(userId, 20).map((row) => ({
+      id: row.id,
+      planId: row.plan_id,
+      amount: row.amount,
+      currency: row.currency,
+      status: row.status,
+      createdAt: row.created_at,
+    })),
     plans: orderedPlans(catalog).map((plan) => toPlanView(plan, formatPlanAmount(plan))),
   };
 }
@@ -121,6 +141,8 @@ export interface CheckoutResult {
   url: string;
   sessionId: string;
   reused: boolean;
+  /** Phase 14: safe client-side checkout configuration (Razorpay popup flow). */
+  checkout?: { provider: "razorpay"; keyId: string; subscriptionId: string; planName: string; currency: string; amount: number | null };
 }
 
 /**
@@ -131,8 +153,28 @@ export interface CheckoutResult {
  */
 export async function startCheckout(user: UserRecord, requestedPlan: unknown, requestId: string): Promise<CheckoutResult> {
   const provider = requireProvider();
+  if (isPaidPlanId(requestedPlan)) {
+    const flightKey = `${user.id}:${requestedPlan}`;
+    const inFlight = inFlightCheckouts.get(flightKey);
+    if (inFlight) {
+      const joined = await inFlight;
+      return { ...joined, reused: true };
+    }
+    const started = performCheckout(provider, user, requestedPlan, requestId);
+    inFlightCheckouts.set(flightKey, started);
+    try {
+      return await started;
+    } finally {
+      inFlightCheckouts.delete(flightKey);
+    }
+  }
   if (!isPaidPlanId(requestedPlan)) throw new BillingError("INVALID_PLAN");
-  const planId = requestedPlan;
+  return performCheckout(provider, user, requestedPlan, requestId);
+}
+
+async function performCheckout(provider: ReturnType<typeof requireProvider>, user: UserRecord, planId: "pro" | "business", requestId: string): Promise<CheckoutResult> {
+  // (validation duplicated from the original entrypoint, unchanged)
+  if (!isPaidPlanId(planId)) throw new BillingError("INVALID_PLAN");
   const plan = getPlanCatalog()[planId];
   const priceId = priceIdForPlan(planId);
   if (!plan.purchasable || !priceId) throw new BillingError("INVALID_PLAN", { message: "This plan is not available for purchase yet." });
@@ -152,6 +194,24 @@ export async function startCheckout(user: UserRecord, requestedPlan: unknown, re
   recordMetric("billing.checkout_attempt", 1, { plan: planId });
   const startedAt = Date.now();
   try {
+    // §9: reuse a still-open checkout for the same plan instead of creating a
+    // second provider subscription (providers without idempotent create).
+    const recent = findRecentOpenCheckout(user.id, provider.name, planId, Date.now() - CHECKOUT_REUSE_WINDOW_MS);
+    if (recent && provider.rebuildCheckoutSession) {
+      const appUrl = getConfig().appUrl;
+      const rebuilt = await provider.rebuildCheckoutSession({
+        sessionId: recent.provider_session_id,
+        planId,
+        priceId,
+        successUrl: `${appUrl}/dashboard/billing/return?session_id={CHECKOUT_SESSION_ID}`,
+      });
+      if (rebuilt) {
+        logger.info("billing.checkout_started", {
+          component: "billing", requestId, userId: user.id, planId, provider: provider.name, reused: true, durationMs: Date.now() - startedAt, result: "ok",
+        });
+        return { url: rebuilt.url, sessionId: rebuilt.id, reused: true, checkout: rebuilt.checkout };
+      }
+    }
     const customerId = await ensureCustomer(user);
     const appUrl = getConfig().appUrl;
     // Idempotency: the same user asking for the same plan inside a short window
@@ -167,6 +227,10 @@ export async function startCheckout(user: UserRecord, requestedPlan: unknown, re
       successUrl: `${appUrl}/dashboard/billing/return?session_id={CHECKOUT_SESSION_ID}`,
       cancelUrl: `${appUrl}/dashboard/billing?checkout=cancelled`,
       idempotencyKey,
+      // The catalog (server-side) is the expected price; adapters that can
+      // read the provider plan verify it and fail closed on mismatch (§87).
+      expectedAmount: plan.price.amount,
+      expectedCurrency: plan.price.currency,
     });
     const reused = Boolean(getOwnedCheckoutRecord(user.id, provider.name, session.id));
     if (!reused) {
@@ -183,7 +247,7 @@ export async function startCheckout(user: UserRecord, requestedPlan: unknown, re
       durationMs: Date.now() - startedAt,
       result: "ok",
     });
-    return { url: session.url, sessionId: session.id, reused };
+    return { url: session.url, sessionId: session.id, reused, checkout: session.checkout };
   } catch (error) {
     recordMetric("billing.checkout_failed", 1, { plan: planId });
     logger.warn("billing.checkout_failed", {
@@ -207,11 +271,43 @@ export async function startCheckout(user: UserRecord, requestedPlan: unknown, re
  * writer the webhook uses, so arriving before the webhook is safe and arriving
  * after it is a no-op. It never marks anything paid from the URL alone.
  */
-export async function confirmCheckout(user: UserRecord, sessionId: unknown): Promise<{ status: "pending" | "complete" | "expired" | "unknown" }> {
+export interface ConfirmCheckoutInput {
+  sessionId: unknown;
+  /** Razorpay checkout handler relay (optional; verified server-side §13/§14). */
+  razorpayPaymentId?: unknown;
+  razorpayOrderId?: unknown;
+  razorpaySubscriptionId?: unknown;
+  razorpaySignature?: unknown;
+}
+
+export async function confirmCheckout(
+  user: UserRecord,
+  input: ConfirmCheckoutInput,
+): Promise<{ status: "pending" | "complete" | "expired" | "unknown" }> {
   const provider = requireProvider();
+  const sessionId = input.sessionId;
   if (typeof sessionId !== "string" || !/^[A-Za-z0-9_-]{8,128}$/.test(sessionId)) return { status: "unknown" };
   const record = getOwnedCheckoutRecord(user.id, provider.name, sessionId);
   if (!record) return { status: "unknown" };
+
+  // Phase 14 §14: when the browser relays Razorpay's checkout confirmation,
+  // verify the HMAC signature server-side before doing anything else. A
+  // fabricated callback fails loudly and never triggers provider lookups.
+  if (input.razorpayPaymentId !== undefined || input.razorpaySignature !== undefined) {
+    const paymentId = typeof input.razorpayPaymentId === "string" ? input.razorpayPaymentId : "";
+    const signature = typeof input.razorpaySignature === "string" ? input.razorpaySignature : "";
+    const orderId = typeof input.razorpayOrderId === "string" ? input.razorpayOrderId : null;
+    const relayedSubscription = typeof input.razorpaySubscriptionId === "string" ? input.razorpaySubscriptionId : null;
+    const verified =
+      paymentId &&
+      signature &&
+      provider.verifyCheckoutConfirmation?.({ orderId, paymentId, subscriptionId: relayedSubscription ?? sessionId, signature });
+    if (!verified) {
+      recordMetric("billing.payment_verification_failed", 1, { provider: provider.name });
+      recordAuditEvent({ userId: user.id, type: "billing_state_changed", detail: "Checkout callback failed signature verification" });
+      throw new BillingError("PAYMENT_VERIFICATION_FAILED");
+    }
+  }
   const session = await provider.getCheckoutSession(sessionId);
   if (!session) return { status: record.status === "complete" ? "complete" : "unknown" };
   if (session.status === "expired") {

@@ -7,10 +7,12 @@ import { restoreUser, SESSION_COOKIE } from "@/lib/auth/session";
 import { getOwnedExtension } from "@/lib/db/repositories/extensions";
 import { getLatestSnapshot, listSnapshots } from "@/lib/db/repositories/snapshots";
 import { listTestRunsForExtension } from "@/lib/db/repositories/test-runs";
+import { listPackagesForExtension } from "@/lib/db/repositories/packages";
 import { runOutcomeLabel, runOutcomeTone, runScoreLabel } from "@/lib/testing/status-labels";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { OpenInteractiveBrowserButton } from "@/components/interactive/OpenInteractiveBrowserButton";
 import { isSafeId } from "@/lib/auth/validation";
 
 export const metadata: Metadata = { title: "Extension" };
@@ -32,6 +34,8 @@ export default async function ExtensionDetailPage({
   const snapshot = getLatestSnapshot(id);
   const snapshots = listSnapshots(id, 20);
   const runs = listTestRunsForExtension(id, 10);
+  const storedPackages = listPackagesForExtension(id).filter((pkg) => pkg.status === "stored").slice(0, 10);
+  const latestPackage = storedPackages[0] ?? null;
 
   return (
     <div className="space-y-6">
@@ -78,6 +82,55 @@ export default async function ExtensionDetailPage({
           View Reports
         </Button>
       </div>
+
+      {latestPackage ? (
+        <Card>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold tracking-tight">Interactive Browser</h2>
+              <p className="mt-1 text-sm text-[var(--text-secondary)]">
+                Launch this exact package ({latestPackage.version ? `v${latestPackage.version}, ` : ""}
+                SHA-256 {latestPackage.sha256.slice(0, 12)}…) in a disposable isolated Chromium and test it
+                interactively — no local install required.
+              </p>
+            </div>
+            <OpenInteractiveBrowserButton packageId={latestPackage.id} />
+          </div>
+        </Card>
+      ) : null}
+
+      <Card>
+        <h2 className="text-base font-semibold tracking-tight">Package versions</h2>
+        <p className="mt-1 text-sm text-[var(--text-secondary)]">
+          Each stored upload is immutable; the interactive browser always loads the exact version you pick.
+        </p>
+        {storedPackages.length === 0 ? (
+          <p className="mt-3 text-sm text-[var(--text-secondary)]">No stored packages. Upload a ZIP to get started.</p>
+        ) : (
+          <div className="mt-4 divide-y divide-[var(--border)]">
+            {storedPackages.map((pkg) => (
+              <div key={pkg.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">
+                    {pkg.version ? `v${pkg.version}` : "Unversioned"}
+                    <span className="ml-2 font-mono text-xs text-[var(--text-secondary)]">
+                      SHA-256 {pkg.sha256.slice(0, 12)}…
+                    </span>
+                  </p>
+                  <p className="text-xs text-[var(--text-secondary)]">
+                    Uploaded {relativeTime(pkg.created_at)} · {(pkg.size / (1024 * 1024)).toFixed(1)} MB
+                  </p>
+                </div>
+                <OpenInteractiveBrowserButton
+                  packageId={pkg.id}
+                  label={pkg.id === latestPackage?.id ? "Open Interactive Browser" : "Open this version"}
+                  variant={pkg.id === latestPackage?.id ? "accent" : "secondary"}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
 
       <Card>
         <h2 className="text-base font-semibold tracking-tight">Analysis history</h2>

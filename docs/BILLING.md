@@ -326,3 +326,43 @@ the variable, then deleting the old endpoint.
 | `502 BILLING_PROVIDER_ERROR` on checkout | Provider API down or key revoked | `billing.provider_error` metric/log has the `errorCode`; the user message is generic and includes a reference id |
 | Account deletion fails with a billing error | Provider cancel failed | Retry; if the provider is down for long, cancel the subscription manually in the dashboard and retry deletion |
 | Duplicate audit rows after a replay | Not expected | The `billing_events` unique index prevents double application; check `billing.webhook_duplicate` and the event id |
+
+## Phase 13: fail-closed entitlements
+
+Entitlement lookups (effective plan, quotas, interactive limits) read the
+subscription store directly; there is **no fallback that widens access**. If
+the lookup fails (store unreachable), gated actions fail with an error — never
+a silent downgrade *or* upgrade. Verified by
+`tests/phase13/billing-failclosed.test.ts`. Heavy resource profiles are a plan
+entitlement evaluated server-side at container start.
+
+
+## Phase 14: Razorpay
+
+`BILLING_PROVIDER=razorpay` adds a second real adapter behind the same
+provider interface (Stripe untouched). See [RAZORPAY.md](RAZORPAY.md) for the
+full operator guide. Key properties:
+
+- **Self-serve**: `/pricing` → Buy Now → Razorpay Standard Checkout →
+  server-side verification (relayed checkout signature + provider lookup) →
+  webhook confirmation → automatic activation. No manual step.
+- **Razorpay subscriptions** (not hand-rolled recurring billing); the local
+  DB never assumes success just because checkout opened.
+- **Fail-closed configuration**: missing credentials are startup errors in
+  every environment; the fake provider is still development/test-only.
+- **Price-change protection**: the adapter verifies the Razorpay plan's
+  amount/currency against the catalog and rejects mismatches
+  (`PAYMENT_MISMATCH`) before creating anything.
+- **Payments ledger** (migration 011): normalized, idempotent payment records
+  (`billing_payments`) power the dashboard's payment history; no card data
+  ever reaches ExtensionLab.
+- **Capabilities are honest**: no hosted portal, no reactivate (Razorpay has
+  no resume-scheduled-cancel); cancel is at cycle end.
+
+## Phase 15: studio runs bill through the existing pipeline
+
+Saved-test runs (dashboard, suite, matrix or CI) use the same
+reserve → queue → run → consume/release transaction as every other test run.
+`Idempotency-Key` replays return the original run instead of reserving twice,
+so retried CI pipelines are never double-charged. Definitions and version
+history are metadata: storing and editing tests never consumes quota.

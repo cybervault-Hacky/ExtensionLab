@@ -13,9 +13,9 @@ import { join } from "node:path";
 import { MAX_EXTENSION_SIZE } from "@/lib/extension/limits";
 
 export type AppEnv = "development" | "test" | "production";
-export type StorageProviderName = "local";
+export type StorageProviderName = "local" | "s3";
 export type EmailProviderName = "console" | "file" | "http" | "noop";
-type BillingProviderName = "stripe" | "fake" | "disabled";
+type BillingProviderName = "stripe" | "razorpay" | "fake" | "disabled";
 export type AIProviderName = "openai" | "fake" | "disabled";
 export type WorkerMode = "embedded" | "external" | "disabled";
 
@@ -27,6 +27,14 @@ export interface AppConfig {
   storage: {
     provider: StorageProviderName;
     path: string;
+    /** Phase 13 §27: S3-compatible object storage settings (provider "s3"). */
+    s3: {
+      bucket: string | null;
+      region: string | null;
+      endpoint: string | null;
+      prefix: string | null;
+      forcePathStyle: boolean;
+    };
   };
   sandbox: {
     image: string;
@@ -76,6 +84,12 @@ export interface AppConfig {
     deletionPolicy: "cancel_immediately" | "cancel_at_period_end";
     /** Days a past_due subscription keeps paid entitlements while the provider retries payment. */
     pastDueGraceDays: number;
+    /**
+     * Phase 14 Razorpay credentials. Server-only; never returned by
+     * describeConfig(), never sent to the client, never logged. `keyId` is
+     * the one intentionally-public value (Razorpay Standard Checkout).
+     */
+    razorpay: { keyId: string | null; keySecret: string | null; webhookSecret: string | null };
   };
   /**
    * Phase 8 AI assistance (see docs/AI.md). The API key is read here and
@@ -152,6 +166,31 @@ export interface AppConfig {
     /** SHA-256 of ADMIN_API_TOKEN; the raw token is never kept in config. */
     tokenHash: string | null;
   };
+  /** Phase 13 §99: maintenance mode pauses NEW browser sessions; existing drain. */
+  maintenanceMode: boolean;
+  /** Phase 11: interactive browser sessions (see docs/INTERACTIVE_BROWSER.md). */
+  interactiveBrowser: {
+    enabled: boolean;
+    maxGlobalSessions: number;
+    maxSessionsPerOrg: number;
+    maxSessionMinutes: number;
+    idleTimeoutMs: number;
+    idleGraceMs: number;
+    frameIntervalMs: number;
+    maxFrameBytes: number;
+    maxArtifactsPerSession: number;
+    /** Phase 12: maximum evidence records per session. */
+    maxEvidencePerSession: number;
+    inputActionsPerMinute: number;
+    keepalivePerMinute: number;
+    viewportMinWidth: number;
+    viewportMaxWidth: number;
+    viewportMinHeight: number;
+    viewportMaxHeight: number;
+    consoleRingSize: number;
+    networkRingSize: number;
+    eventRingSize: number;
+  };
   /** Requests per minute per client for the sensitive endpoints. */
   rateLimits: {
     login: number;
@@ -172,6 +211,8 @@ export interface AppConfig {
     billingWebhook: number;
     /** Phase 8: AI assistance calls per user per minute (separate from app limits). */
     aiRequest: number;
+    /** Phase 11: interactive browser session creation per user per minute. */
+    browserSessionCreate: number;
   };
 }
 
@@ -296,8 +337,12 @@ function buildConfig(): AppConfig {
     problems.push("SESSION_SECRET must be set (at least 32 characters) in production");
   }
 
-  const storageProvider = oneOf("STORAGE_PROVIDER", ["local"] as const, "local", problems);
+  const storageProvider = oneOf("STORAGE_PROVIDER", ["local", "s3"] as const, "local", problems);
   const storagePath = str("STORAGE_PATH") ?? join(process.cwd(), "data", "storage");
+  const s3Bucket = str("S3_BUCKET") ?? null;
+  if (storageProvider === "s3" && !s3Bucket) {
+    problems.push("S3_BUCKET is required when STORAGE_PROVIDER=s3");
+  }
 
   const sandboxMaxConcurrency = num(
     "SANDBOX_MAX_CONCURRENCY",
@@ -355,7 +400,7 @@ function buildConfig(): AppConfig {
   // explicitly; production never falls back to it.
   const billingProvider = oneOf(
     "BILLING_PROVIDER",
-    ["stripe", "fake", "disabled"] as const,
+    ["stripe", "razorpay", "fake", "disabled"] as const,
     isProduction ? "disabled" : "fake",
     problems,
   );
@@ -363,8 +408,20 @@ function buildConfig(): AppConfig {
   const billingWebhookSecret = str("BILLING_WEBHOOK_SECRET") ?? null;
   const billingCurrency = (str("BILLING_CURRENCY") ?? "inr").toLowerCase();
   if (!/^[a-z]{3}$/.test(billingCurrency)) problems.push("BILLING_CURRENCY must be a 3-letter ISO 4217 code");
-  const proPriceId = str("BILLING_PRO_PRICE_ID") ?? null;
-  const businessPriceId = str("BILLING_BUSINESS_PRICE_ID") ?? null;
+  // Phase 14: Razorpay plan ids (RAZORPAY_PLAN_ID_<PLAN>) take precedence for
+  // the razorpay provider; the generic BILLING_<PLAN>_PRICE_ID remains the
+  // shared mapping slot so planIdForPriceId stays provider-agnostic.
+  const razorpayKeyId = str("RAZORPAY_KEY_ID") ?? null;
+  const razorpayKeySecret = str("RAZORPAY_KEY_SECRET") ?? null;
+  const razorpayWebhookSecret = str("RAZORPAY_WEBHOOK_SECRET") ?? null;
+  const razorpayPlanPro = str("RAZORPAY_PLAN_ID_PRO") ?? null;
+  const razorpayPlanBusiness = str("RAZORPAY_PLAN_ID_BUSINESS") ?? null;
+  let proPriceId = str("BILLING_PRO_PRICE_ID") ?? null;
+  let businessPriceId = str("BILLING_BUSINESS_PRICE_ID") ?? null;
+  if (billingProvider === "razorpay") {
+    if (razorpayPlanPro) proPriceId = razorpayPlanPro;
+    if (razorpayPlanBusiness) businessPriceId = razorpayPlanBusiness;
+  }
   const proAmount = str("BILLING_PRO_AMOUNT") !== undefined ? num("BILLING_PRO_AMOUNT", 0, problems, { min: 0 }) : null;
   const businessAmount =
     str("BILLING_BUSINESS_AMOUNT") !== undefined ? num("BILLING_BUSINESS_AMOUNT", 0, problems, { min: 0 }) : null;
@@ -377,6 +434,20 @@ function buildConfig(): AppConfig {
     }
     if (isProduction && billingSecretKey && !/^(sk|rk)_live_/.test(billingSecretKey)) {
       problems.push("BILLING_SECRET_KEY must be a live Stripe key in production");
+    }
+  }
+  if (billingProvider === "razorpay") {
+    // Fail closed in EVERY environment: selecting razorpay without the full
+    // credential set is a configuration error, never a silent fallback to
+    // fake billing (§5).
+    if (!razorpayKeyId) problems.push("RAZORPAY_KEY_ID is required when BILLING_PROVIDER=razorpay");
+    if (!razorpayKeySecret) problems.push("RAZORPAY_KEY_SECRET is required when BILLING_PROVIDER=razorpay");
+    if (!razorpayWebhookSecret) problems.push("RAZORPAY_WEBHOOK_SECRET is required when BILLING_PROVIDER=razorpay");
+    if (!proPriceId && !businessPriceId) {
+      problems.push("At least one of RAZORPAY_PLAN_ID_PRO / RAZORPAY_PLAN_ID_BUSINESS is required when BILLING_PROVIDER=razorpay");
+    }
+    if (razorpayKeyId && !/^(rzp_(test|live)_)[A-Za-z0-9]+$/.test(razorpayKeyId)) {
+      problems.push("RAZORPAY_KEY_ID must be a Razorpay key id (rzp_test_… / rzp_live_…)");
     }
   }
   if (billingProvider === "fake" && isProduction) {
@@ -428,7 +499,17 @@ function buildConfig(): AppConfig {
     appUrl: appUrl.replace(/\/$/, ""),
     databasePath: resolveDatabasePath(problems),
     sessionSecret,
-    storage: { provider: storageProvider, path: storagePath },
+    storage: {
+      provider: storageProvider,
+      path: storagePath,
+      s3: {
+        bucket: s3Bucket,
+        region: str("S3_REGION") ?? null,
+        endpoint: str("S3_ENDPOINT") ?? null,
+        prefix: str("S3_PREFIX") ?? null,
+        forcePathStyle: bool("S3_FORCE_PATH_STYLE", false),
+      },
+    },
     sandbox: {
       image: str("SANDBOX_IMAGE") ?? "extensionlab-sandbox:local",
       maxConcurrency: sandboxMaxConcurrency,
@@ -472,6 +553,7 @@ function buildConfig(): AppConfig {
       fakeWebhookSecret,
       deletionPolicy,
       pastDueGraceDays: num("BILLING_PAST_DUE_GRACE_DAYS", 7, problems, { min: 0, max: 60 }),
+      razorpay: { keyId: razorpayKeyId, keySecret: razorpayKeySecret, webhookSecret: razorpayWebhookSecret },
     },
     ai: {
       provider: aiProvider,
@@ -502,7 +584,7 @@ function buildConfig(): AppConfig {
     publicApi: {
       enabled: bool("PUBLIC_API_ENABLED", true),
       keyTtlMs: num("API_KEY_TTL_MS", 365 * 24 * 3600 * 1000, problems, { min: 60_000 }),
-      maxScopes: num("API_KEY_MAX_SCOPES", 12, problems, { min: 1 }),
+      maxScopes: num("API_KEY_MAX_SCOPES", 16, problems, { min: 1 }), // >= API_SCOPES length so "all scopes" stays selectable
       rateLimits: {
         read: num("API_RATE_LIMIT_READ_PER_MIN", 240, problems, { min: 1 }),
         upload: num("API_RATE_LIMIT_UPLOAD_PER_MIN", 30, problems, { min: 1 }),
@@ -550,6 +632,30 @@ function buildConfig(): AppConfig {
         tokenHash: token ? createHash("sha256").update(token).digest("hex") : null,
       };
     })(),
+    maintenanceMode: bool("MAINTENANCE_MODE", false),
+    interactiveBrowser: {
+      enabled: bool("INTERACTIVE_BROWSER_ENABLED", true),
+      maxGlobalSessions: num("INTERACTIVE_BROWSER_MAX_GLOBAL", 4, problems, { min: 1, max: 256 }),
+      maxSessionsPerOrg: num("INTERACTIVE_BROWSER_MAX_PER_ORG", 4, problems, { min: 1, max: 256 }),
+      // Deployment ceiling; a plan may lower it (never raise it) per session.
+      maxSessionMinutes: num("INTERACTIVE_BROWSER_MAX_MINUTES", 20, problems, { min: 1, max: 240 }),
+      idleTimeoutMs: num("INTERACTIVE_BROWSER_IDLE_TIMEOUT_MS", 5 * 60 * 1000, problems, { min: 30_000 }),
+      idleGraceMs: num("INTERACTIVE_BROWSER_IDLE_GRACE_MS", 2 * 60 * 1000, problems, { min: 30_000 }),
+      // Maximum frame rate the client may request; the server enforces it.
+      frameIntervalMs: num("INTERACTIVE_BROWSER_FRAME_INTERVAL_MS", 500, problems, { min: 200, max: 10_000 }),
+      maxFrameBytes: num("INTERACTIVE_BROWSER_MAX_FRAME_BYTES", 3 * 1024 * 1024, problems, { min: 32 * 1024 }),
+      maxArtifactsPerSession: num("INTERACTIVE_BROWSER_MAX_ARTIFACTS", 20, problems, { min: 1, max: 200 }),
+      maxEvidencePerSession: num("INTERACTIVE_BROWSER_MAX_EVIDENCE", 50, problems, { min: 1, max: 500 }),
+      inputActionsPerMinute: num("INTERACTIVE_BROWSER_INPUT_PER_MIN", 240, problems, { min: 10 }),
+      keepalivePerMinute: num("INTERACTIVE_BROWSER_KEEPALIVE_PER_MIN", 30, problems, { min: 1 }),
+      viewportMinWidth: num("INTERACTIVE_BROWSER_VIEWPORT_MIN_WIDTH", 640, problems, { min: 320 }),
+      viewportMaxWidth: num("INTERACTIVE_BROWSER_VIEWPORT_MAX_WIDTH", 1920, problems, { min: 640, max: 3840 }),
+      viewportMinHeight: num("INTERACTIVE_BROWSER_VIEWPORT_MIN_HEIGHT", 480, problems, { min: 240 }),
+      viewportMaxHeight: num("INTERACTIVE_BROWSER_VIEWPORT_MAX_HEIGHT", 1080, problems, { min: 480, max: 2160 }),
+      consoleRingSize: num("INTERACTIVE_BROWSER_CONSOLE_RING", 300, problems, { min: 50, max: 2000 }),
+      networkRingSize: num("INTERACTIVE_BROWSER_NETWORK_RING", 300, problems, { min: 50, max: 2000 }),
+      eventRingSize: num("INTERACTIVE_BROWSER_EVENT_RING", 300, problems, { min: 50, max: 2000 }),
+    },
     rateLimits: {
       login: num("RATE_LIMIT_LOGIN_PER_MIN", 30, problems, { min: 1 }),
       signup: num("RATE_LIMIT_SIGNUP_PER_MIN", 30, problems, { min: 1 }),
@@ -569,6 +675,7 @@ function buildConfig(): AppConfig {
       // Keyed by source address; generous so provider retries are never dropped.
       billingWebhook: num("RATE_LIMIT_BILLING_WEBHOOK_PER_MIN", 600, problems, { min: 1 }),
       aiRequest: num("RATE_LIMIT_AI_PER_MIN", 10, problems, { min: 1 }),
+      browserSessionCreate: num("RATE_LIMIT_BROWSER_SESSION_CREATE_PER_MIN", 10, problems, { min: 1 }),
     },
   };
 
@@ -623,6 +730,8 @@ export function describeConfig(config: AppConfig = getConfig()): Record<string, 
       proConfigured: Boolean(config.billing.priceIds.pro),
       businessConfigured: Boolean(config.billing.priceIds.business),
       deletionPolicy: config.billing.deletionPolicy,
+      // Phase 14: presence only — key/secret values never leave the server.
+      razorpayConfigured: Boolean(config.billing.razorpay.keyId && config.billing.razorpay.keySecret && config.billing.razorpay.webhookSecret),
     },
     ai: {
       provider: config.ai.provider,

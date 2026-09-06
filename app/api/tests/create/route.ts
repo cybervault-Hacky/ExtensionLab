@@ -4,7 +4,7 @@ import { getClientIp, validateIncomingTestUrl } from "@/lib/runtime/api-helpers"
 import { MAX_EXTENSION_SIZE } from "@/lib/extension/limits";
 import { canUploadPackage } from "@/lib/billing/entitlements";
 import { ApiError, apiErrorResponse, assertEntitled, badRequest, requestIdFrom, requireApiUser, requireSameOrigin } from "@/lib/auth/api";
-import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
+import { enforceRateLimitAsync } from "@/lib/auth/rate-limit-policy";
 import { getOwnedExtension } from "@/lib/db/repositories/extensions";
 import { isSafeId } from "@/lib/auth/validation";
 import { storeExtensionPackage } from "@/lib/packages/service";
@@ -30,7 +30,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       requireSameOrigin(request);
       const user = requireApiUser(request);
       const ip = getClientIp(request);
-      const rate = enforceRateLimit("testCreate", `${user.id}:${ip}`);
+      const rate = await enforceRateLimitAsync("testCreate", `${user.id}:${ip}`);
       if (!rate.ok) throw new ApiError(429, "rate_limited", "Too many test runs. Please wait and try again.");
 
       const contentType = request.headers.get("content-type") ?? "";

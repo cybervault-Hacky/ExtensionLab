@@ -50,6 +50,8 @@ export interface TestRunCreateInput {
   runId?: string;
   token?: string;
   trusted?: boolean;
+  /** Phase 15: stop executing remaining tests after the first failure. */
+  stopOnFailure?: boolean;
 }
 
 export interface TestRunPersistenceHooks {
@@ -70,6 +72,8 @@ interface ManagedRun {
   snap: TestRunSnapshot;
   listeners: EventEmitter;
   finishedNotified: boolean;
+  /** Phase 15: suite "stop on failure" policy (default false = continue). */
+  stopOnFailure: boolean;
   unsubscribeSandbox?: () => void;
   completion?: Promise<TestRunInfo>;
 }
@@ -125,7 +129,7 @@ export class TestRunManager {
     snap.events.push(JSON.stringify({ type: "test-run", state: "created", runId, timestamp: Date.now() }));
 
     const listener = new EventEmitter();
-    this.runs.set(runId, { snap, listeners: listener, finishedNotified: false });
+    this.runs.set(runId, { snap, listeners: listener, finishedNotified: false, stopOnFailure: input.stopOnFailure === true });
     if (!input.trusted) this.recordIp(input.clientIp);
 
     return { runId, token };
@@ -289,6 +293,22 @@ export class TestRunManager {
         statusesById.set(test.id, result.status);
         run.snap.results.push(result);
         this.emit(run, { type: "test-result", result: publicResult(result) });
+        // Phase 15: suites with a "stop" failure policy mark every remaining
+        // test skipped once one finishes with a failure — deterministic,
+        // recorded explicitly, never silently dropped.
+        if (
+          run.stopOnFailure &&
+          (result.status === "failed" || result.status === "error" || result.status === "timeout") &&
+          tests.indexOf(test) < tests.length - 1
+        ) {
+          for (const remaining of tests.slice(tests.indexOf(test) + 1)) {
+            const skipped = this.skippedResult(run, remaining, "Suite failure policy: stopped after an earlier failure.");
+            statusesById.set(remaining.id, skipped.status);
+            run.snap.results.push(skipped);
+            this.emit(run, { type: "test-result", result: publicResult(skipped) });
+          }
+          break;
+        }
       }
 
       if (this.isCancelled(run)) {
@@ -493,7 +513,6 @@ export class TestRunManager {
         if (test.category === "permissions") {
           result.warnings.push("Broad host permissions are declared. Review whether this access is required.");
         }
-
         let unsupportedAssertionCount = 0;
         for (const assertion of test.assertions) {
           // Capability gate: assertions the browser cannot support are skipped,
@@ -511,6 +530,28 @@ export class TestRunManager {
             result.evidence.push({ id: `ev-${randomBytes(4).toString("hex")}`, timestamp: Date.now(), kind: "result", label: outcome.message });
           } else {
             result.errors.push(outcome.message);
+          }
+        }
+
+        // Phase 15: cleanup steps run after assertions regardless of the test's
+        // outcome. Same allowlist + capability gates; failures become warnings
+        // so cleanup can never flip a passing test into a failure.
+        if (test.cleanupSteps && test.cleanupSteps.length > 0 && (result.status as string) !== "timeout") {
+          for (const action of test.cleanupSteps.slice(0, testConfig().MAX_ACTIONS_PER_TEST)) {
+            if (!isSafeAction(action)) {
+              result.warnings.push("Unsafe cleanup action skipped.");
+              continue;
+            }
+            const cleanupSupport = isActionSupported(browserProfile, action.type);
+            if (!cleanupSupport.supported) {
+              result.warnings.push(`Cleanup ${action.type} is not supported by the ${browserProfile.displayName} runtime and was skipped.`);
+              continue;
+            }
+            try {
+              await this.sandboxManager.executeTestAction(sandboxId, this.sandboxTokenFor(run), action);
+            } catch {
+              result.warnings.push(`Cleanup ${action.type} failed; the sandbox is discarded after the run regardless.`);
+            }
           }
         }
 

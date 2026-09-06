@@ -5,7 +5,7 @@ import { normalizeEmail } from "@/lib/auth/validation";
 import { findUserByEmail } from "@/lib/db/repositories/users";
 import { apiErrorResponse, badRequest, rateLimited, requireSameOrigin } from "@/lib/auth/api";
 import { checkRateLimit } from "@/lib/auth/rate-limit";
-import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
+import { enforceRateLimitAsync } from "@/lib/auth/rate-limit-policy";
 import { issuePasswordReset } from "@/lib/auth/password-reset-service";
 import { logger } from "@/lib/observability/logger";
 import { classifyError } from "@/lib/observability/errors";
@@ -17,7 +17,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     requireSameOrigin(request);
     const ip = getClientIp(request);
-    const limit = enforceRateLimit("forgotPassword", ip);
+    const limit = await enforceRateLimitAsync("forgotPassword", ip);
     if (!limit.ok) throw rateLimited(limit.retryAfterSeconds);
 
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;

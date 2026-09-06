@@ -115,6 +115,28 @@ A browser whose image is missing is reported unavailable
 before anything is queued or charged — build the image or set
 `BROWSER_<ID>_ENABLED=0` to hide the runtime. See [BROWSERS.md](BROWSERS.md).
 
+### Interactive browser (Phase 11)
+
+The interactive browser reuses the Chromium sandbox image — no extra image to
+build. Sessions are disposable: hard lifetime (`INTERACTIVE_BROWSER_MAX_MINUTES`
+ceiling + per-plan minutes), idle timeout + grace, and teardown on every path.
+Capacity is deployment-tuned; see `.env.example` for the full
+`INTERACTIVE_BROWSER_*` and `PLAN_<PLAN>_INTERACTIVE_*` list and
+[INTERACTIVE_BROWSER.md](INTERACTIVE_BROWSER.md) for the model.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `INTERACTIVE_BROWSER_ENABLED` | `true` | Feature kill-switch (fail closed). |
+| `INTERACTIVE_BROWSER_MAX_GLOBAL` | `4` | Concurrent live sessions deployment-wide. |
+| `INTERACTIVE_BROWSER_MAX_PER_ORG` | `4` | Concurrent live sessions per organization. |
+| `INTERACTIVE_BROWSER_IDLE_TIMEOUT_MS` / `_IDLE_GRACE_MS` | `300000` / `120000` | READY/ACTIVE → IDLE → EXPIRED timings. |
+| `INTERACTIVE_BROWSER_FRAME_INTERVAL_MS` | `500` | Frame cadence floor (bandwidth cap). |
+| `INTERACTIVE_BROWSER_INPUT_PER_MIN` | `240` | Per-session input rate limit. |
+| `INTERACTIVE_BROWSER_MAX_EVIDENCE` | `50` | Phase 12 evidence records per session (references, not payload copies). |
+
+Edge and Firefox for interactive sessions arrive with the supported runtime;
+Chromium is the only offered browser until then.
+
 ### Jobs / worker
 
 | Variable | Default | Notes |
@@ -356,3 +378,43 @@ message so nobody deploys against an unsupported backend by accident.
 - **Env review**: every Phase 10 knob is documented in `.env.example`
   (organizations, public API, webhooks, coordination, SSO, fairness) with
   safe defaults and startup validation.
+
+
+## Phase 13: production scaling additions
+
+- **Environment model**: `APP_ENV=development|test|staging|production`.
+  Production validates strictly at boot (required secrets, storage config,
+  session key length) and **never silently falls back** — a missing S3 bucket,
+  a PostgreSQL URL on the SQLite-only build, or `COORDINATION_PROVIDER=redis`
+  without the `redis` package is a hard startup failure.
+- **Multi-worker compose**: see `docker-compose.workers.yml` — web, a
+  dedicated migrate-once service (the migration runner holds the DB write lock
+  via `BEGIN IMMEDIATE`, so concurrent runners serialize instead of racing),
+  and N worker replicas with unique `WORKER_ID`s. With SQLite, keep one writer
+  process pair per volume; the honest limits are documented in
+  [SCALING.md](SCALING.md).
+- **Object storage**: `STORAGE_PROVIDER=s3` with `S3_BUCKET`, optional
+  `S3_ENDPOINT`/`S3_PREFIX` (S3-compatible stores). Readiness performs a real
+  write+delete against the bucket.
+- **New e2e flags**: `EXTENSIONLAB_E2E_{DOCKER,POSTGRES,REDIS,STORAGE}=1`
+  (`tests/e2e/phase13-infra.e2e.test.ts`); unflagged they skip with a reason.
+- **New docs**: [WORKERS.md](WORKERS.md), [RUNTIME.md](RUNTIME.md),
+  [SCALING.md](SCALING.md), [OBSERVABILITY.md](OBSERVABILITY.md).
+
+
+## Phase 14: Razorpay deployment checklist
+
+1. Razorpay account in **test mode** first; plans created per the catalog
+   (Pro ₹799 → `79900` paise, Business ₹2499 → `249900` paise).
+2. `.env`: `BILLING_PROVIDER=razorpay`, `RAZORPAY_KEY_ID/KEY_SECRET/
+   WEBHOOK_SECRET`, `RAZORPAY_PLAN_ID_PRO/BUSINESS`, `BILLING_CURRENCY=inr`,
+   catalog amounts. All secrets server-side; never `NEXT_PUBLIC_*`.
+3. **Build environment** must also carry `BILLING_PROVIDER=razorpay` (or
+   `CSP_RAZORPAY=1`) so the Edge CSP allows the checkout origins
+   (see [RAZORPAY.md](RAZORPAY.md#content-security-policy)).
+4. Webhook (HTTPS only): `https://<domain>/api/billing/webhook` with the
+   configured secret and the lifecycle events enabled.
+5. Run `node scripts/db-migrate.mjs` (migration 011 adds the payments
+   ledger).
+6. Rotation: update `RAZORPAY_*` secrets and the webhook secret together,
+   then restart. Secret rotation never requires a database change.

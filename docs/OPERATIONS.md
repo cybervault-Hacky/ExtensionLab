@@ -103,6 +103,7 @@ with counters:
 | Jobs | queued jobs never run → `expired`; finished jobs deleted; stale active runs → `INFRASTRUCTURE_ERROR`; dangling reservations released | `STALE_JOB_DAYS`, `JOB_RETENTION_DAYS`, `STALE_RUN_MINUTES` |
 | Billing | open checkout sessions older than 24 h → `expired`; old checkout rows deleted; processed `billing_events` older than 90 days deleted (subscriptions are never deleted) | `JOB_RETENTION_DAYS` (checkout rows) |
 | AI | stored AI results past `expires_at` (Phase 8) | `AI_RESULT_RETENTION_DAYS` |
+| Interactive | max-lifetime expiry, idle → IDLE → EXPIRED, dead containers (`browser_crash`), stale `STARTING` (`start_abandoned`), expired session screenshots (Phase 11) | `INTERACTIVE_BROWSER_*`, artifact retention |
 
 Artifact and package retention are **per plan** since Phase 7
 (`PLAN_<PLAN>_ARTIFACT_RETENTION_DAYS` / `PLAN_<PLAN>_PACKAGE_RETENTION_DAYS`);
@@ -214,6 +215,29 @@ Details: [BROWSERS.md](BROWSERS.md).
 Without Docker the suite **skips with an explicit reason**; it never passes
 by pretending. Set `EXTENSIONLAB_E2E_DOCKER=1` (as CI does) to turn a missing
 Docker into a failure. `E2E_LOG_LEVEL=info` shows worker logs while debugging.
+
+## Interactive browser sessions (Phase 11)
+
+`INTERACTIVE_BROWSER_CLEANUP` runs on the same scheduler windows (idempotency
+keyed per interval). It is the safety net: sessions past their hard lifetime,
+idle past grace, or whose container died are destroyed and marked with a
+visible stop reason (`max_lifetime`, `idle_timeout`, `browser_crash`,
+`start_abandoned`). Capacity is enforced at start time — global
+(`INTERACTIVE_BROWSER_MAX_GLOBAL`), per-org (`INTERACTIVE_BROWSER_MAX_PER_ORG`)
+and per-user (plan concurrency) — counting only sessions that hold a runtime
+slot, so a long queue waits rather than deadlocks.
+
+Operational checks:
+
+```bash
+curl -s -H "Authorization: Bearer $ADMIN_API_TOKEN" https://host/api/admin            # queue + interactiveSessions by status
+curl -s -H "Authorization: Bearer $ADMIN_API_TOKEN" https://host/api/admin/browser-sessions
+```
+
+Symptoms → causes: many `QUEUED` starts = capacity saturated (raise caps or
+wait); `browser_start_failed` bursts = sandbox image/Docker health;
+`browser_crash` clusters = image or host resource issues; `package_unavailable`
+on reload = the bound upload was deleted (by design, fail closed).
 
 ## Billing
 
@@ -334,3 +358,57 @@ asserts the fail-closed startup error when the driver is absent),
 signature and tamper verification). Unflagged, these suites skip with an
 explicit reason; flagged, missing infrastructure is a hard failure — never a
 fake pass.
+
+## Phase 13 operations
+
+- **Maintenance mode** (`MAINTENANCE_MODE=true`): new interactive sessions are
+  rejected with an honest "paused for planned maintenance" message; existing
+  sessions drain naturally (idle timeout/expiry). Readiness reports it.
+- **Worker fleet**: registry + heartbeats, derived states (READY/DRAINING/
+  UNHEALTHY/STOPPED), cooperative drain and administrative disable — see
+  [WORKERS.md](WORKERS.md). `GET /api/admin/workers` lists the fleet.
+- **Circuit breaker**: repeated container-start failures open the breaker;
+  the session stays queued (no slot burned) and recovers on probes. Thresholds
+  via `BREAKER_*` env.
+- **Out-of-band reconcile**: `POST /api/admin/reconcile` re-runs the
+  label-scoped orphan-container sweep (never crosses environments).
+- **Failure taxonomy**: `/api/admin/failures` groups failures by class
+  (USER_ERROR, BROWSER_ERROR, STORAGE_ERROR, …) — see
+  [OBSERVABILITY.md](OBSERVABILITY.md).
+- **Report pinning**: `POST/DELETE /api/reports/{id}/pin`; pinned reports keep
+  their artifacts out of retention deletion.
+
+
+## Phase 14 billing operations
+
+- **Webhook health**: `billing_events` is the ledger — rows stuck in
+  `processing` mean a sync backlog (webhook returned 5xx; Razorpay retries).
+  `billing.webhook_received/rejected/duplicate` metrics show delivery health.
+- **Alert candidates** (configure in your own stack; none are pre-wired):
+  webhook failure spike, `billing.payment_verification_failed` spike,
+  `BILLING_PROVIDER_UNAVAILABLE` persistence, stuck `processing` events,
+  any `BILLING_CONFIGURATION_ERROR`.
+- **Halted/past-due subscriptions**: paid entitlements survive only
+  `BILLING_PAST_DUE_GRACE_DAYS` (default 7) after the provider reports a
+  failed/halted charge; then Free limits apply. Data is never deleted.
+- **Duplicate webhook** deliveries are safe: event ids are claimed in the
+  ledger; re-delivery returns 200 without re-applying state.
+- **Out-of-order events** are safe: older snapshots cannot overwrite newer
+  subscription state (timestamp guard).
+
+## Phase 15 operations — Test Automation Studio
+
+- **Migration**: `012_phase15_test_studio.sql` (saved tests, versions,
+  suites, suite items, baselines + `test_runs.saved_test_id/version`).
+- **Workers**: no new worker type. Saved-test runs are `AUTOMATED_TEST` jobs
+  with a `savedTest` payload; existing capacity, fairness and retry behavior
+  apply unchanged.
+- **Honesty invariants**: run outcomes come only from real execution
+  (missing Docker/worker → infrastructure error, never fake success); CI
+  `exitCode` is 0 only on `COMPLETED`; regression classification is a pure
+  deterministic function; screenshot diffing is not implemented.
+- **E2E**: `tests/e2e/phase15-studio.e2e.test.ts` — full CI journey
+  (API key → trigger → worker → real browser → poll) behind
+  `EXTENSIONLAB_E2E_DOCKER=1`; missing Docker under the flag is a hard
+  failure, without it an explicit skip.
+- **Docs**: `docs/TEST_AUTOMATION_STUDIO.md`, `docs/CI_CD.md`.

@@ -150,7 +150,10 @@ describe("rate-limit policy", () => {
     };
     for (const [file, action] of Object.entries(expectations)) {
       const source = readFileSync(join(apiRoot, file), "utf8");
-      expect(source, file).toContain(`enforceRateLimit("${action}"`);
+      // Phase 13: routes use the distributed variant of the SAME central policy.
+      const usesPolicy =
+        source.includes(`enforceRateLimit("${action}"`) || source.includes(`enforceRateLimitAsync("${action}"`);
+      expect(usesPolicy, file).toBe(true);
     }
     const publicReport = readFileSync(join(process.cwd(), "app", "report", "shared", "[token]", "page.tsx"), "utf8");
     expect(publicReport).toContain('enforceRateLimit("publicReport"');

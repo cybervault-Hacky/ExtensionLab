@@ -87,6 +87,9 @@ export interface TestRunRow {
   access_token_hash?: string | null;
   /** Phase 9 additions (null on pre-Phase-9 rows, which were Chromium-only). */
   browser_id?: string | null;
+  /** Phase 15: the saved test + exact version this run executed (null for built-in suite runs). */
+  saved_test_id?: string | null;
+  saved_test_version?: number | null;
   browser_version?: string | null;
   engine?: string | null;
   matrix_run_id?: string | null;
@@ -175,6 +178,8 @@ export interface RegressionComparisonRow {
 
 export interface ReportRow {
   id: string;
+  /** Phase 13: set when the report is pinned (artifact retention respects it). */
+  pinned_at?: number | null;
   organization_id?: string | null;
   user_id: string;
   extension_id: string | null;
@@ -275,6 +280,14 @@ export interface WorkerRow {
   sandbox_available: number | null;
   sandbox_detail: string | null;
   stopping: number;
+  /** Phase 13: reported worker version (registration). */
+  version: string | null;
+  /** Phase 13: capabilities JSON (job types, browsers, resource profiles). */
+  capabilities_json: string | null;
+  /** Phase 13: first READY heartbeat timestamp (STARTING → READY evidence). */
+  ready_at: number | null;
+  /** Phase 13: operator scheduling intent: running | draining | disabled. */
+  desired_state: string;
 }
 
 export interface QuotaReservationRow {
@@ -343,6 +356,84 @@ export interface BillingEventRow {
   result: string;
   created_at: number;
   processed_at: number | null;
+}
+
+/** Phase 14: normalized payment written from verified provider events only. */
+export interface BillingPaymentRow {
+  id: string;
+  user_id: string;
+  provider: string;
+  provider_payment_id: string;
+  provider_invoice_id: string | null;
+  provider_subscription_id: string | null;
+  plan_id: string;
+  amount: number;
+  currency: string;
+  status: string;
+  created_at: number;
+}
+
+/** Phase 15: saved test (Test Automation Studio). The definition is validated
+ * JSON built from allowlisted actions/assertions; versions are immutable. */
+export interface SavedTestRow {
+  id: string;
+  organization_id: string | null;
+  user_id: string;
+  extension_id: string | null;
+  package_id: string;
+  package_sha256: string;
+  package_version: string | null;
+  name: string;
+  description: string;
+  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  current_version: number;
+  tags_json: string;
+  browser_targets_json: string;
+  definition_json: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SavedTestVersionRow {
+  id: string;
+  test_id: string;
+  version: number;
+  definition_json: string;
+  created_by: string;
+  created_at: number;
+}
+
+export interface SavedTestSuiteRow {
+  id: string;
+  organization_id: string | null;
+  user_id: string;
+  name: string;
+  description: string;
+  failure_policy: "stop" | "continue";
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SavedTestSuiteItemRow {
+  id: string;
+  suite_id: string;
+  test_id: string;
+  position: number;
+  depends_on_json: string;
+}
+
+export interface SavedTestBaselineRow {
+  id: string;
+  user_id: string;
+  saved_test_id: string;
+  run_id: string;
+  test_version: number;
+  package_sha256: string;
+  browser_id: string;
+  outcome: string;
+  duration_ms: number | null;
+  summary_json: string;
+  created_at: number;
 }
 
 export interface CheckoutSessionRow {
@@ -544,5 +635,92 @@ export interface ReportPublicationRow {
   slug: string;
   summary: string | null;
   created_by: string;
+  created_at: number;
+}
+
+/** Phase 11: interactive browser session (durable state; runtime_json is internal). */
+export interface InteractiveBrowserSessionRow {
+  id: string;
+  user_id: string;
+  organization_id: string | null;
+  extension_id: string | null;
+  package_id: string | null;
+  package_version: string | null;
+  package_sha256: string;
+  browser: string;
+  browser_version: string | null;
+  status: string;
+  state_reason: string | null;
+  stop_reason: string | null;
+  initial_url: string | null;
+  current_url: string | null;
+  viewport_width: number;
+  viewport_height: number;
+  popup_open: number;
+  popup_width: number | null;
+  popup_height: number | null;
+  artifact_count: number;
+  extension_info_json: string;
+  runtime_json: string;
+  quota_reservation_id: string | null;
+  job_id: string | null;
+  request_id: string | null;
+  created_at: number;
+  updated_at: number;
+  started_at: number | null;
+  ready_at: number | null;
+  last_activity_at: number | null;
+  expires_at: number;
+  stopped_at: number | null;
+}
+
+/** Phase 11: bounded structured session event (lifecycle + observed evidence). */
+export interface InteractiveSessionEventRow {
+  id: string;
+  session_id: string;
+  seq: number;
+  type: string;
+  level: string;
+  message: string;
+  metadata_json: string;
+  created_at: number;
+}
+
+/** Phase 11: screenshot artifact captured from an interactive browser session. */
+export interface BrowserSessionArtifactRow {
+  id: string;
+  session_id: string;
+  user_id: string;
+  type: string;
+  storage_key: string;
+  size: number;
+  sha256: string;
+  content_type: string;
+  label: string | null;
+  package_version: string | null;
+  package_sha256: string | null;
+  browser: string | null;
+  browser_version: string | null;
+  created_at: number;
+  expires_at: number;
+}
+
+/** Phase 12: user-marked evidence referencing runtime records (bounded). */
+export interface SessionEvidenceRow {
+  id: string;
+  session_id: string;
+  user_id: string;
+  organization_id?: string | null;
+  kind: "console" | "network" | "event" | "screenshot" | "test_recipe";
+  ref_id: string | null;
+  label: string | null;
+  summary: string;
+  metadata_json: string;
+  package_id: string | null;
+  package_version: string | null;
+  package_sha256: string;
+  browser: string;
+  browser_version: string | null;
+  report_id: string | null;
   created_at: number;
 }
