@@ -87,6 +87,9 @@ export interface TestRunRow {
   access_token_hash?: string | null;
   /** Phase 9 additions (null on pre-Phase-9 rows, which were Chromium-only). */
   browser_id?: string | null;
+  /** Phase 15: the saved test + exact version this run executed (null for built-in suite runs). */
+  saved_test_id?: string | null;
+  saved_test_version?: number | null;
   browser_version?: string | null;
   engine?: string | null;
   matrix_run_id?: string | null;
@@ -367,6 +370,69 @@ export interface BillingPaymentRow {
   amount: number;
   currency: string;
   status: string;
+  created_at: number;
+}
+
+/** Phase 15: saved test (Test Automation Studio). The definition is validated
+ * JSON built from allowlisted actions/assertions; versions are immutable. */
+export interface SavedTestRow {
+  id: string;
+  organization_id: string | null;
+  user_id: string;
+  extension_id: string | null;
+  package_id: string;
+  package_sha256: string;
+  package_version: string | null;
+  name: string;
+  description: string;
+  status: "DRAFT" | "ACTIVE" | "ARCHIVED";
+  current_version: number;
+  tags_json: string;
+  browser_targets_json: string;
+  definition_json: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SavedTestVersionRow {
+  id: string;
+  test_id: string;
+  version: number;
+  definition_json: string;
+  created_by: string;
+  created_at: number;
+}
+
+export interface SavedTestSuiteRow {
+  id: string;
+  organization_id: string | null;
+  user_id: string;
+  name: string;
+  description: string;
+  failure_policy: "stop" | "continue";
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SavedTestSuiteItemRow {
+  id: string;
+  suite_id: string;
+  test_id: string;
+  position: number;
+  depends_on_json: string;
+}
+
+export interface SavedTestBaselineRow {
+  id: string;
+  user_id: string;
+  saved_test_id: string;
+  run_id: string;
+  test_version: number;
+  package_sha256: string;
+  browser_id: string;
+  outcome: string;
+  duration_ms: number | null;
+  summary_json: string;
   created_at: number;
 }
 

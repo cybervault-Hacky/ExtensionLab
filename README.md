@@ -853,6 +853,21 @@ Not yet specified. The repository is currently configured for private or
 internal use.
 
 
+## Test Automation Studio (Phase 15)
+
+Build repeatable extension tests **without writing JavaScript, shell commands
+or browser automation code** at `/dashboard/tests/studio`: compose Setup /
+Actions / Assertions / Cleanup from the exact engine allowlist, get selector
+assistance restricted to safe strategies, define typed bounded variables
+(secrets deliberately not supported), and save versioned tests (v1, v2, …)
+bound to the exact package SHA-256. Run them manually or from CI via
+`POST /api/v1/tests/:testId/runs` using existing API keys — with immutable
+run history, deterministic baselines/regression classification, suites with
+explicit dependencies and stop/continue failure policy, honest CI exit codes
+and real-browser execution only (never faked). Details:
+[docs/TEST_AUTOMATION_STUDIO.md](docs/TEST_AUTOMATION_STUDIO.md) and
+[docs/CI_CD.md](docs/CI_CD.md).
+
 ## Billing (Phase 14)
 
 Self-serve subscriptions with Razorpay: pick a plan on `/pricing`, click

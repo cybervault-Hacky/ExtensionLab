@@ -358,3 +358,11 @@ full operator guide. Key properties:
   ever reaches ExtensionLab.
 - **Capabilities are honest**: no hosted portal, no reactivate (Razorpay has
   no resume-scheduled-cancel); cancel is at cycle end.
+
+## Phase 15: studio runs bill through the existing pipeline
+
+Saved-test runs (dashboard, suite, matrix or CI) use the same
+reserve → queue → run → consume/release transaction as every other test run.
+`Idempotency-Key` replays return the original run instead of reserving twice,
+so retried CI pipelines are never double-charged. Definitions and version
+history are metadata: storing and editing tests never consumes quota.

@@ -332,3 +332,27 @@ make no certification claims.
   server-only and excluded from `describeConfig()`, API responses, logs,
   error messages and the client bundle (build-time audit in the Phase 14
   verification run). Only the public key id reaches the browser.
+
+## Phase 15 additions — Test Automation Studio
+
+- **Definitions are data, never code**: saved tests accept only the Phase 4
+  action/assertion allowlists, bounded fields and the existing safe selector
+  grammar (`validateSelector`). `execute_js`/`evaluate`/`run_shell`/`raw_cdp`/
+  `docker_exec`-style content is rejected at save, import and again in the
+  engine (`isSafeAction`).
+- **Variables never execute**: typed (`text`/`number`/`url`/`boolean`),
+  length-bounded, resolved by pure server-side substitution; URLs restricted
+  to http/https. Secrets are not implemented — no encrypted variable storage
+  exists, and passwords must never be stored as variables.
+- **Exact package binding**: runs refuse packages whose SHA-256 no longer
+  matches the saved test (`CONFLICT`, never silent substitution).
+- **Tenancy**: every saved-test/suite/baseline read is owner- or
+  organization-scoped; cross-tenant access is impossible (covered by
+  `tests/phase15`).
+- **Import is untrusted input**: size-bounded, strict schema, unknown-field
+  rejection, full re-validation, always a fresh DRAFT; atomic rejection.
+- **CI uses the existing auth stack**: API keys with `tests:read`/`tests:write`
+  (already in the scope catalog), organization scoping, rate limits and quota
+  reservation — no parallel auth path and no plan bypass.
+- **AI remains advisory**: failure analysis never executes code, modifies
+  tests, touches secrets or decides regression status.

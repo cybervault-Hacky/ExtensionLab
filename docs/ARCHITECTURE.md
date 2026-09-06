@@ -405,3 +405,41 @@ configured Razorpay plans; statuses normalize in the adapter
 `billing_payments` (migration 011) is the idempotent payments ledger written
 only from verified events. Everything else — entitlement service, quotas,
 plan catalog, webhook ledger, audit — is reused unchanged.
+
+
+## Phase 15 components — Test Automation Studio
+
+- `lib/testing/saved-test-schema.ts` — the saved-test definition schema
+  (versioned, `schemaVersion: 1`): centralized limits, the exact action and
+  assertion allowlists, selector validation via the existing
+  `validateSelector`, variable typing/resolution (pure substitution, never
+  evaluation) and strict unknown-field rejection. Guards save, import and
+  execution.
+- `lib/testing/studio-service.ts` — the business core: lifecycle
+  (DRAFT → ACTIVE → ARCHIVED), immutable versioning, duplicate-as-new-identity,
+  optimistic concurrency (`expectedVersion`), exact package SHA-256 binding,
+  suite construction (deterministic order, backwards-only dependencies,
+  stop/continue failure policy, same-package members), import/export and
+  baseline save/compare. Routes contain no business logic.
+- `lib/testing/studio-baseline.ts` — deterministic regression classification
+  (`NEW_FAILURE` / `FIXED_FAILURE` / `UNCHANGED_FAILURE` / `NEW_WARNING` /
+  `PERFORMANCE_REGRESSION` / `NO_REGRESSION`) as a pure function plus the
+  `saved_test_baselines` storage. Screenshot diffing is intentionally not
+  implemented.
+- `lib/db/repositories/saved-tests.ts` — `saved_tests`, `saved_test_versions`,
+  `saved_test_suites(_items)`, analytics and deterministic flaky detection.
+- Engine extensions (no second engine): `TestCaseInput.cleanupSteps` (cleanup
+  runs after assertions; failures are warnings, never failures),
+  `TestRunCreateInput.stopOnFailure` (suite failure policy: remaining tests are
+  explicitly skipped), and `AUTOMATED_TEST.payload.savedTest` — a prepared,
+  validated, variable-resolved definition the worker rebuilds into `TestCase`s
+  via `savedTestsAsTestCases` (deterministic ids `saved_<id>_v<n>`).
+- `test_runs.saved_test_id` / `saved_test_version` bind each run to the exact
+  test version it executed; historical runs stay immutable when definitions
+  are edited.
+- CI surface: `/api/v1/tests/:testId/runs` (+ `/:runId`) using the existing
+  `withApiKey`/`withIdempotency` stack and the existing `test_run.*` webhook
+  events. `lib/api/v1-tests-support.ts` maps internal states onto the CI enum
+  (QUEUED/STARTING/RUNNING/COMPLETED/FAILED/TIMEOUT/CANCELLED) with honest
+  exit codes (0 only on COMPLETED).
+- Migration `012_phase15_test_studio.sql`.

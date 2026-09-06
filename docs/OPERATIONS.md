@@ -395,3 +395,20 @@ fake pass.
   ledger; re-delivery returns 200 without re-applying state.
 - **Out-of-order events** are safe: older snapshots cannot overwrite newer
   subscription state (timestamp guard).
+
+## Phase 15 operations — Test Automation Studio
+
+- **Migration**: `012_phase15_test_studio.sql` (saved tests, versions,
+  suites, suite items, baselines + `test_runs.saved_test_id/version`).
+- **Workers**: no new worker type. Saved-test runs are `AUTOMATED_TEST` jobs
+  with a `savedTest` payload; existing capacity, fairness and retry behavior
+  apply unchanged.
+- **Honesty invariants**: run outcomes come only from real execution
+  (missing Docker/worker → infrastructure error, never fake success); CI
+  `exitCode` is 0 only on `COMPLETED`; regression classification is a pure
+  deterministic function; screenshot diffing is not implemented.
+- **E2E**: `tests/e2e/phase15-studio.e2e.test.ts` — full CI journey
+  (API key → trigger → worker → real browser → poll) behind
+  `EXTENSIONLAB_E2E_DOCKER=1`; missing Docker under the flag is a hard
+  failure, without it an explicit skip.
+- **Docs**: `docs/TEST_AUTOMATION_STUDIO.md`, `docs/CI_CD.md`.

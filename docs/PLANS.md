@@ -229,3 +229,13 @@ fails closed with `PAYMENT_MISMATCH`. Entitlements activate automatically on
 verified payment — no approval step. Cancel keeps paid access until the
 period ends; downgrades/expiry never delete data. See
 [RAZORPAY.md](RAZORPAY.md).
+
+## Phase 15 notes (Test Automation Studio)
+
+Studio usage draws on existing entitlements — no new limit categories:
+saved-test runs consume `test_run` quota exactly like built-in suite runs;
+cross-browser saved tests require the cross-browser entitlement; browsers per
+matrix run and per-user concurrency follow the table above; artifact
+retention governs run evidence while test **definitions** are retained
+independently and never expire with runs. API-key (CI) runs are subject to
+the same reservations — API users never bypass plan limits.

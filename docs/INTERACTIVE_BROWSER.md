@@ -268,3 +268,15 @@ keepalive rates, viewport bounds, and ring sizes.
   [SECURITY.md](SECURITY.md)).
 - **Timing**: `interactive.session_start_latency` (queue → READY) is recorded
   per session and visible via `/api/admin/metrics`.
+
+## Phase 15 relation — studio tests and recipes
+
+The studio (`/dashboard/tests/studio`) gives repeatable tests a permanent
+home with versioning, suites, baselines and CI triggers, while interactive
+sessions remain the exploratory surface. Phase 12 recipes (navigate/click/
+type/wait/assert_element/screenshot kinds) map 1:1 onto the same allowlisted
+actions the studio builder emits, so a recipe captured live can be recreated
+as a saved test step-by-step; the studio re-validates every selector and
+action server-side. Recording is explicit (never auto-record), and saved
+tests never contain arbitrary JavaScript — the same boundary the interactive
+enforcer already enforces.

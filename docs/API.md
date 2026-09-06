@@ -174,3 +174,19 @@ User API:
 | --- | --- | --- |
 | POST | `/api/reports/{id}/pin` | pin a report (protects its artifacts from retention) |
 | DELETE | `/api/reports/{id}/pin` | unpin |
+
+## Phase 15: saved-test CI endpoints
+
+| Method & path | Scope | Notes |
+| --- | --- | --- |
+| `POST /api/v1/tests/:testId/runs` | `tests:write` | Trigger a run of a saved test or suite. Safe params only: `version`, `browser`/`browsers`, `variables`, `testUrl` — everything else is rejected; all values are validated server-side. Honors `Idempotency-Key`. 202 with `runs[]`. |
+| `GET /api/v1/tests/:testId/runs` | `tests:read` | Paginated run history for the test with CI statuses and exit codes. |
+| `GET /api/v1/tests/:testId/runs/:runId` | `tests:read` | Poll one run: `QUEUED`/`STARTING`/`RUNNING`/`COMPLETED`/`FAILED`/`TIMEOUT`/`CANCELLED`, totals and per-test results once finished. `exitCode` is 0 only on `COMPLETED`. |
+
+Dashboard endpoints (session auth, same-origin): `GET/POST /api/tests/saved`,
+`GET/PATCH/POST /api/tests/saved/:testId` (detail/update/duplicate),
+`POST /api/tests/saved/:testId/run`, `GET /api/tests/saved/:testId/runs`,
+`GET /api/tests/saved/:testId/export`, `GET/POST /api/tests/saved/:testId/baseline`
+(`?runId=` compares), `POST /api/tests/saved/import`, `GET/POST
+/api/tests/suites`, `GET /api/tests/suites/:suiteId`,
+`POST /api/tests/suites/:suiteId/run`, `GET /api/tests/templates`.

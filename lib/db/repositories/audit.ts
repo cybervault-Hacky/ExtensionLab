@@ -30,7 +30,14 @@ export type AuditEventType =
   | "admin_job_cancel"
   // Phase 13 internal admin (worker lifecycle + reconciliation).
   | "admin_worker_state"
-  | "admin_reconcile";
+  | "admin_reconcile"
+  /** Phase 15: Test Automation Studio lifecycle (metadata only, never definitions). */
+  | "test_created"
+  | "test_updated"
+  | "test_archived"
+  | "test_run_started"
+  | "baseline_created"
+  | "ci_run_requested";
 
 export function recordAuditEvent(input: {
   userId: string | null;
