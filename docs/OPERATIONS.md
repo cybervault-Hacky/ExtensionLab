@@ -103,6 +103,7 @@ with counters:
 | Jobs | queued jobs never run → `expired`; finished jobs deleted; stale active runs → `INFRASTRUCTURE_ERROR`; dangling reservations released | `STALE_JOB_DAYS`, `JOB_RETENTION_DAYS`, `STALE_RUN_MINUTES` |
 | Billing | open checkout sessions older than 24 h → `expired`; old checkout rows deleted; processed `billing_events` older than 90 days deleted (subscriptions are never deleted) | `JOB_RETENTION_DAYS` (checkout rows) |
 | AI | stored AI results past `expires_at` (Phase 8) | `AI_RESULT_RETENTION_DAYS` |
+| Interactive | max-lifetime expiry, idle → IDLE → EXPIRED, dead containers (`browser_crash`), stale `STARTING` (`start_abandoned`), expired session screenshots (Phase 11) | `INTERACTIVE_BROWSER_*`, artifact retention |
 
 Artifact and package retention are **per plan** since Phase 7
 (`PLAN_<PLAN>_ARTIFACT_RETENTION_DAYS` / `PLAN_<PLAN>_PACKAGE_RETENTION_DAYS`);
@@ -214,6 +215,29 @@ Details: [BROWSERS.md](BROWSERS.md).
 Without Docker the suite **skips with an explicit reason**; it never passes
 by pretending. Set `EXTENSIONLAB_E2E_DOCKER=1` (as CI does) to turn a missing
 Docker into a failure. `E2E_LOG_LEVEL=info` shows worker logs while debugging.
+
+## Interactive browser sessions (Phase 11)
+
+`INTERACTIVE_BROWSER_CLEANUP` runs on the same scheduler windows (idempotency
+keyed per interval). It is the safety net: sessions past their hard lifetime,
+idle past grace, or whose container died are destroyed and marked with a
+visible stop reason (`max_lifetime`, `idle_timeout`, `browser_crash`,
+`start_abandoned`). Capacity is enforced at start time — global
+(`INTERACTIVE_BROWSER_MAX_GLOBAL`), per-org (`INTERACTIVE_BROWSER_MAX_PER_ORG`)
+and per-user (plan concurrency) — counting only sessions that hold a runtime
+slot, so a long queue waits rather than deadlocks.
+
+Operational checks:
+
+```bash
+curl -s -H "Authorization: Bearer $ADMIN_API_TOKEN" https://host/api/admin            # queue + interactiveSessions by status
+curl -s -H "Authorization: Bearer $ADMIN_API_TOKEN" https://host/api/admin/browser-sessions
+```
+
+Symptoms → causes: many `QUEUED` starts = capacity saturated (raise caps or
+wait); `browser_start_failed` bursts = sandbox image/Docker health;
+`browser_crash` clusters = image or host resource issues; `package_unavailable`
+on reload = the bound upload was deleted (by design, fail closed).
 
 ## Billing
 

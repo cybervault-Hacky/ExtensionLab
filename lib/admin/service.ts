@@ -11,6 +11,11 @@ import {
   requeueFailedJob,
   summarizeLiveWorkers,
 } from "@/lib/db/repositories/jobs";
+import {
+  countSessionsByStatus,
+  listAdmittedSessions,
+  listRecentlyFinishedSessions,
+} from "@/lib/db/repositories/browser-sessions";
 import { recordAuditEvent } from "@/lib/db/repositories/audit";
 import { AppError } from "@/lib/observability/errors";
 import { logger } from "@/lib/observability/logger";
@@ -49,6 +54,8 @@ export interface AdminOverview {
     sandboxAvailable: boolean | null;
     lastSeenAt: number | null;
   };
+  /** Phase 11: interactive browser session counts by status. */
+  interactiveSessions: Record<string, number>;
 }
 
 export function getAdminOverview(): AdminOverview {
@@ -62,7 +69,35 @@ export function getAdminOverview(): AdminOverview {
       sandboxAvailable: summary.sandboxAvailable,
       lastSeenAt: summary.lastSeenAt,
     },
+    interactiveSessions: countSessionsByStatus(),
   };
+}
+
+/**
+ * Phase 11: operator view of interactive sessions. Read-only, safe
+ * projections only — no runtime coordinates, container ids or tokens.
+ */
+export function listInteractiveSessionsAdmin(): Array<Record<string, unknown>> {
+  return listAdmittedSessions()
+    .concat(listRecentlyFinishedSessions(25))
+    .slice(0, 100)
+    .map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      organizationId: row.organization_id,
+      packageId: row.package_id,
+      packageVersion: row.package_version,
+      browser: row.browser,
+      browserVersion: row.browser_version,
+      status: row.status,
+      stateReason: row.state_reason,
+      stopReason: row.stop_reason,
+      createdAt: row.created_at,
+      readyAt: row.ready_at,
+      lastActivityAt: row.last_activity_at,
+      expiresAt: row.expires_at,
+      stoppedAt: row.stopped_at,
+    }));
 }
 
 export function retryJobAdmin(requestId: string | null, jobId: string): { id: string; status: string } {

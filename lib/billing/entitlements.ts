@@ -178,6 +178,7 @@ function countOpenReservationsInPeriod(userId: string, kind: UsageKind, period: 
 export function limitFor(plan: Plan, kind: UsageKind): number {
   if (kind === "analysis") return plan.analysisLimit;
   if (kind === "ai_request") return plan.aiEnabled ? plan.aiRequestLimit : 0;
+  if (kind === "interactive_browser") return plan.interactiveBrowserEnabled ? plan.interactiveBrowserSessionLimit : 0;
   return plan.testRunLimit;
 }
 
@@ -236,8 +237,37 @@ export function canUseAI(userId: string, now = Date.now()): EntitlementResult {
   return quotaCheck(userId, "ai_request", now);
 }
 
-function quotaCheck(userId: string, kind: UsageKind, now: number): EntitlementResult {
-  const effective = getEffectivePlan(userId, now);
+/**
+ * Phase 11: interactive browser sessions. A plan without the feature is a
+ * *plan* denial (402); an exhausted allowance is a *quota* denial (429). Both
+ * are decided here — never in routes or components — exactly like AI.
+ */
+export function canUseInteractiveBrowser(userId: string, now = Date.now()): EntitlementResult {
+  const plan = getUserPlan(userId);
+  if (!plan.interactiveBrowserEnabled || plan.interactiveBrowserSessionLimit <= 0) {
+    return {
+      allowed: false,
+      reason: "plan",
+      requiredPlan: firstPlanWith((p) => p.interactiveBrowserEnabled, plan),
+      message: "Interactive browser testing is not included in your plan.",
+    };
+  }
+  return quotaCheck(userId, "interactive_browser", now);
+}
+
+/** Phase 11: concurrent interactive sessions the user's plan admits. */
+export function getInteractiveBrowserConcurrency(userId: string): number {
+  return Math.max(1, getUserPlan(userId).interactiveBrowserConcurrency);
+}
+
+/** Phase 11: per-session lifetime cap in minutes, clamped by the deployment ceiling. */
+export function getInteractiveBrowserMaxMinutes(userId: string): number {
+  const planMinutes = getUserPlan(userId).interactiveBrowserMaxMinutes;
+  const ceiling = getConfig().interactiveBrowser.maxSessionMinutes;
+  return Math.max(1, Math.min(planMinutes, ceiling));
+}
+
+function quotaCheck(userId: string, kind: UsageKind, now: number): EntitlementResult {  const effective = getEffectivePlan(userId, now);
   const usage = getQuotaUsage(userId, kind, now);
   if (usage.remaining > 0) return { allowed: true };
   return {
@@ -391,7 +421,12 @@ function firstPlanWith(predicate: (plan: Plan) => boolean, current: Plan): PlanI
 }
 
 /** Quota limits for a plan id (used when reserving inside a transaction). */
-export function planLimits(planId: PlanId): { analysis: number; test_run: number; ai_request: number } {
+export function planLimits(planId: PlanId): { analysis: number; test_run: number; ai_request: number; interactive_browser: number } {
   const plan = getPlan(planId);
-  return { analysis: plan.analysisLimit, test_run: plan.testRunLimit, ai_request: plan.aiEnabled ? plan.aiRequestLimit : 0 };
+  return {
+    analysis: plan.analysisLimit,
+    test_run: plan.testRunLimit,
+    ai_request: plan.aiEnabled ? plan.aiRequestLimit : 0,
+    interactive_browser: plan.interactiveBrowserEnabled ? plan.interactiveBrowserSessionLimit : 0,
+  };
 }

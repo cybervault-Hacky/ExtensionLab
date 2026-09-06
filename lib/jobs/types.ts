@@ -66,6 +66,19 @@ export interface OrgExportPayload {
   organizationId: string;
 }
 
+export interface InteractiveBrowserStartPayload {
+  sessionId: string;
+}
+
+export interface InteractiveBrowserStopPayload {
+  sessionId: string;
+  /** Stable machine reason recorded on the session ("expired" | "idle" | ...). */
+  reason: string;
+  to: "STOPPED" | "EXPIRED" | "FAILED";
+}
+
+export type InteractiveBrowserCleanupScope = "all" | "sessions" | "artifacts";
+
 export type JobPayloadMap = {
   AUTOMATED_TEST: AutomatedTestPayload;
   EMAIL: EmailPayload;
@@ -74,6 +87,9 @@ export type JobPayloadMap = {
   ANALYSIS: AnalysisPayload;
   WEBHOOK_DELIVERY: WebhookDeliveryPayload;
   ORG_EXPORT: OrgExportPayload;
+  INTERACTIVE_BROWSER_START: InteractiveBrowserStartPayload;
+  INTERACTIVE_BROWSER_STOP: InteractiveBrowserStopPayload;
+  INTERACTIVE_BROWSER_CLEANUP: { scope?: InteractiveBrowserCleanupScope };
 };
 
 export interface JobContext<T extends JobType = JobType> {

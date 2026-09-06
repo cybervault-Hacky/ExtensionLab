@@ -26,6 +26,9 @@ they cannot drift apart.
 | Browser concurrency | 1 | 2 | 3 |
 | Regression testing / baselines (Phase 9) | – | ✓ | ✓ |
 | Advanced test suites — `service-worker`, `permission-smoke` (Phase 9) | – | ✓ | ✓ |
+| Interactive browser sessions per period (Phase 11) | 5 | 60 | 300 |
+| Interactive browser: concurrent live sessions | 1 | 2 | 4 |
+| Interactive browser: max session length | 10 min | 30 min | 60 min |
 
 "Period" is the calendar month for Free users and the **subscription billing
 period** (`currentPeriodStart` → `currentPeriodEnd`) for paid users; usage
@@ -185,6 +188,16 @@ from then on, and the next cleanup uses the owner's *current* plan.
 - `currentUsage` in a 429 body is `used + reserved` for the current period.
 - Upgrading applies immediately (the next request sees the new limits);
   downgrading applies at the boundary the provider reports.
+
+## Interactive browser notes (Phase 11)
+
+Interactive sessions reuse the same reserve → consume → release accounting as
+test runs: the per-period unit is **reserved** at session creation, **consumed**
+when the browser actually reaches READY, and **released** when a session is
+stopped before it started. Capacity (concurrent live sessions) is queue
+backpressure, not a quota: an over-capacity start stays QUEUED and retries as
+slots free. The hard lifetime ceiling never moves for keepalives. Deployment
+caps (`INTERACTIVE_BROWSER_MAX_GLOBAL` / `_PER_ORG`) apply above plan limits.
 
 ## Adding or changing a plan
 

@@ -115,6 +115,27 @@ A browser whose image is missing is reported unavailable
 before anything is queued or charged — build the image or set
 `BROWSER_<ID>_ENABLED=0` to hide the runtime. See [BROWSERS.md](BROWSERS.md).
 
+### Interactive browser (Phase 11)
+
+The interactive browser reuses the Chromium sandbox image — no extra image to
+build. Sessions are disposable: hard lifetime (`INTERACTIVE_BROWSER_MAX_MINUTES`
+ceiling + per-plan minutes), idle timeout + grace, and teardown on every path.
+Capacity is deployment-tuned; see `.env.example` for the full
+`INTERACTIVE_BROWSER_*` and `PLAN_<PLAN>_INTERACTIVE_*` list and
+[INTERACTIVE_BROWSER.md](INTERACTIVE_BROWSER.md) for the model.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `INTERACTIVE_BROWSER_ENABLED` | `true` | Feature kill-switch (fail closed). |
+| `INTERACTIVE_BROWSER_MAX_GLOBAL` | `4` | Concurrent live sessions deployment-wide. |
+| `INTERACTIVE_BROWSER_MAX_PER_ORG` | `4` | Concurrent live sessions per organization. |
+| `INTERACTIVE_BROWSER_IDLE_TIMEOUT_MS` / `_IDLE_GRACE_MS` | `300000` / `120000` | READY/ACTIVE → IDLE → EXPIRED timings. |
+| `INTERACTIVE_BROWSER_FRAME_INTERVAL_MS` | `500` | Frame cadence floor (bandwidth cap). |
+| `INTERACTIVE_BROWSER_INPUT_PER_MIN` | `240` | Per-session input rate limit. |
+
+Edge and Firefox for interactive sessions arrive with the supported runtime;
+Chromium is the only offered browser until then.
+
 ### Jobs / worker
 
 | Variable | Default | Notes |

@@ -546,3 +546,70 @@ export interface ReportPublicationRow {
   created_by: string;
   created_at: number;
 }
+
+/** Phase 11: interactive browser session (durable state; runtime_json is internal). */
+export interface InteractiveBrowserSessionRow {
+  id: string;
+  user_id: string;
+  organization_id: string | null;
+  extension_id: string | null;
+  package_id: string | null;
+  package_version: string | null;
+  package_sha256: string;
+  browser: string;
+  browser_version: string | null;
+  status: string;
+  state_reason: string | null;
+  stop_reason: string | null;
+  initial_url: string | null;
+  current_url: string | null;
+  viewport_width: number;
+  viewport_height: number;
+  popup_open: number;
+  popup_width: number | null;
+  popup_height: number | null;
+  artifact_count: number;
+  extension_info_json: string;
+  runtime_json: string;
+  quota_reservation_id: string | null;
+  job_id: string | null;
+  request_id: string | null;
+  created_at: number;
+  updated_at: number;
+  started_at: number | null;
+  ready_at: number | null;
+  last_activity_at: number | null;
+  expires_at: number;
+  stopped_at: number | null;
+}
+
+/** Phase 11: bounded structured session event (lifecycle + observed evidence). */
+export interface InteractiveSessionEventRow {
+  id: string;
+  session_id: string;
+  seq: number;
+  type: string;
+  level: string;
+  message: string;
+  metadata_json: string;
+  created_at: number;
+}
+
+/** Phase 11: screenshot artifact captured from an interactive browser session. */
+export interface BrowserSessionArtifactRow {
+  id: string;
+  session_id: string;
+  user_id: string;
+  type: string;
+  storage_key: string;
+  size: number;
+  sha256: string;
+  content_type: string;
+  label: string | null;
+  package_version: string | null;
+  package_sha256: string | null;
+  browser: string | null;
+  browser_version: string | null;
+  created_at: number;
+  expires_at: number;
+}

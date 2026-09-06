@@ -152,6 +152,27 @@ export interface AppConfig {
     /** SHA-256 of ADMIN_API_TOKEN; the raw token is never kept in config. */
     tokenHash: string | null;
   };
+  /** Phase 11: interactive browser sessions (see docs/INTERACTIVE_BROWSER.md). */
+  interactiveBrowser: {
+    enabled: boolean;
+    maxGlobalSessions: number;
+    maxSessionsPerOrg: number;
+    maxSessionMinutes: number;
+    idleTimeoutMs: number;
+    idleGraceMs: number;
+    frameIntervalMs: number;
+    maxFrameBytes: number;
+    maxArtifactsPerSession: number;
+    inputActionsPerMinute: number;
+    keepalivePerMinute: number;
+    viewportMinWidth: number;
+    viewportMaxWidth: number;
+    viewportMinHeight: number;
+    viewportMaxHeight: number;
+    consoleRingSize: number;
+    networkRingSize: number;
+    eventRingSize: number;
+  };
   /** Requests per minute per client for the sensitive endpoints. */
   rateLimits: {
     login: number;
@@ -172,6 +193,8 @@ export interface AppConfig {
     billingWebhook: number;
     /** Phase 8: AI assistance calls per user per minute (separate from app limits). */
     aiRequest: number;
+    /** Phase 11: interactive browser session creation per user per minute. */
+    browserSessionCreate: number;
   };
 }
 
@@ -550,6 +573,28 @@ function buildConfig(): AppConfig {
         tokenHash: token ? createHash("sha256").update(token).digest("hex") : null,
       };
     })(),
+    interactiveBrowser: {
+      enabled: bool("INTERACTIVE_BROWSER_ENABLED", true),
+      maxGlobalSessions: num("INTERACTIVE_BROWSER_MAX_GLOBAL", 4, problems, { min: 1, max: 256 }),
+      maxSessionsPerOrg: num("INTERACTIVE_BROWSER_MAX_PER_ORG", 4, problems, { min: 1, max: 256 }),
+      // Deployment ceiling; a plan may lower it (never raise it) per session.
+      maxSessionMinutes: num("INTERACTIVE_BROWSER_MAX_MINUTES", 20, problems, { min: 1, max: 240 }),
+      idleTimeoutMs: num("INTERACTIVE_BROWSER_IDLE_TIMEOUT_MS", 5 * 60 * 1000, problems, { min: 30_000 }),
+      idleGraceMs: num("INTERACTIVE_BROWSER_IDLE_GRACE_MS", 2 * 60 * 1000, problems, { min: 30_000 }),
+      // Maximum frame rate the client may request; the server enforces it.
+      frameIntervalMs: num("INTERACTIVE_BROWSER_FRAME_INTERVAL_MS", 500, problems, { min: 200, max: 10_000 }),
+      maxFrameBytes: num("INTERACTIVE_BROWSER_MAX_FRAME_BYTES", 3 * 1024 * 1024, problems, { min: 32 * 1024 }),
+      maxArtifactsPerSession: num("INTERACTIVE_BROWSER_MAX_ARTIFACTS", 20, problems, { min: 1, max: 200 }),
+      inputActionsPerMinute: num("INTERACTIVE_BROWSER_INPUT_PER_MIN", 240, problems, { min: 10 }),
+      keepalivePerMinute: num("INTERACTIVE_BROWSER_KEEPALIVE_PER_MIN", 30, problems, { min: 1 }),
+      viewportMinWidth: num("INTERACTIVE_BROWSER_VIEWPORT_MIN_WIDTH", 640, problems, { min: 320 }),
+      viewportMaxWidth: num("INTERACTIVE_BROWSER_VIEWPORT_MAX_WIDTH", 1920, problems, { min: 640, max: 3840 }),
+      viewportMinHeight: num("INTERACTIVE_BROWSER_VIEWPORT_MIN_HEIGHT", 480, problems, { min: 240 }),
+      viewportMaxHeight: num("INTERACTIVE_BROWSER_VIEWPORT_MAX_HEIGHT", 1080, problems, { min: 480, max: 2160 }),
+      consoleRingSize: num("INTERACTIVE_BROWSER_CONSOLE_RING", 300, problems, { min: 50, max: 2000 }),
+      networkRingSize: num("INTERACTIVE_BROWSER_NETWORK_RING", 300, problems, { min: 50, max: 2000 }),
+      eventRingSize: num("INTERACTIVE_BROWSER_EVENT_RING", 300, problems, { min: 50, max: 2000 }),
+    },
     rateLimits: {
       login: num("RATE_LIMIT_LOGIN_PER_MIN", 30, problems, { min: 1 }),
       signup: num("RATE_LIMIT_SIGNUP_PER_MIN", 30, problems, { min: 1 }),
@@ -569,6 +614,7 @@ function buildConfig(): AppConfig {
       // Keyed by source address; generous so provider retries are never dropped.
       billingWebhook: num("RATE_LIMIT_BILLING_WEBHOOK_PER_MIN", 600, problems, { min: 1 }),
       aiRequest: num("RATE_LIMIT_AI_PER_MIN", 10, problems, { min: 1 }),
+      browserSessionCreate: num("RATE_LIMIT_BROWSER_SESSION_CREATE_PER_MIN", 10, problems, { min: 1 }),
     },
   };
 

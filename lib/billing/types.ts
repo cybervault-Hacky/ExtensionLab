@@ -34,6 +34,8 @@ export interface PlanFeatures {
   regressionTesting: boolean;
   /** Phase 9: advanced test suites (setup/teardown, dependencies, templates beyond the core suite). */
   advancedSuites: boolean;
+  /** Phase 11: interactive browser sessions may be started. */
+  interactiveBrowserEnabled: boolean;
 }
 
 export interface PlanLimits {
@@ -51,6 +53,12 @@ export interface PlanLimits {
   browserConcurrency: number;
   /** Phase 9: most browsers selectable in one matrix run. */
   maxBrowsersPerRun: number;
+  /** Phase 11: interactive browser sessions started per billing period. */
+  interactiveBrowserSessionLimit: number;
+  /** Phase 11: concurrent interactive browser sessions for one user. */
+  interactiveBrowserConcurrency: number;
+  /** Phase 11: maximum interactive session lifetime in minutes (never above the deployment ceiling). */
+  interactiveBrowserMaxMinutes: number;
   /** Minimum number of days test-run/report history is kept. */
   historyRetentionDays: number;
   /** Days runtime artifacts are kept after a run. */

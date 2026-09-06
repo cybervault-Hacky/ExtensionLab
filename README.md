@@ -700,6 +700,8 @@ Upload → Validate → Store package → Queue job → Worker → Docker sandbo
 - `docs/OPERATIONS.md` — runbooks: worker, cleanup, E2E, troubleshooting.
 - `docs/BROWSERS.md` — multi-browser platform: runtimes, capabilities,
   matrices, comparison, baselines and regression.
+- `docs/INTERACTIVE_BROWSER.md` — Phase 11 interactive extension browser:
+  lifecycle, exact package binding, security model, API, jobs and recovery.
 
 ## Phase 7: Plans, Billing & Entitlements
 
@@ -825,6 +827,25 @@ coordination. Personal workspaces and all Phase 1–9 behaviour are unchanged.
 Documentation: `docs/ORGANIZATIONS.md`, `docs/API.md`, `docs/API_KEYS.md`,
 `docs/WEBHOOKS.md`, `docs/ENTERPRISE.md`, `docs/SSO.md` (plus updates to
 SECURITY, DEPLOYMENT, OPERATIONS, ARCHITECTURE and PLANS).
+
+## Phase 11 — Interactive extension browser
+
+Load your uploaded extension package — the exact bytes, hash-verified — into a
+disposable isolated Chromium and drive it from the web workspace at
+`/dashboard/browser/[sessionId]`: browser chrome (back/forward/reload/address
+bar), typed pointer/keyboard/scroll input, the extension's real popup rendered
+inside the container, and Console / Network / Extension / Events / Screenshots
+panels over a live SSE stream. Sessions are hard-lifetime limited with idle
+expiry and visible stop reasons; concurrency and per-period quotas reuse the
+Phase 7 entitlements; start/stop/cleanup run as jobs on the Phase 6 queue
+against the Phase 3/9 Docker runtime. The uploaded extension stays untrusted:
+typed allowlisted input only (validated twice), navigation behind the Phase 3
+SSRF guard, PNG frames instead of video, no CDP/shell/flags/Docker socket, and
+every termination path removes the container and the extracted package.
+Chromium is offered today; Edge and Firefox arrive with the supported runtime.
+
+Documentation: `docs/INTERACTIVE_BROWSER.md` (plus updates to SECURITY,
+DEPLOYMENT, OPERATIONS, ARCHITECTURE, PLANS and `.env.example`).
 
 ## License
 

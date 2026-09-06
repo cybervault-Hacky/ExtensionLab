@@ -342,3 +342,32 @@ database, the filesystem or the test engine.
 
 Uploaded code remains untrusted data executed only in disposable containers;
 none of the new surfaces change that boundary.
+
+## Phase 11 additions — Interactive browser
+
+- **Interactive sessions** (`lib/interactive`, `interactive_browser_sessions`
+  table, migration 007): a `InteractiveBrowserSession` row binds one uploaded
+  package *version* by id + SHA-256 and walks
+  `CREATED → QUEUED → STARTING → READY → ACTIVE/IDLE → terminal`. Every
+  terminal state records a stop reason. See
+  [docs/INTERACTIVE_BROWSER.md](INTERACTIVE_BROWSER.md).
+- **Runtime reuse, not duplication**: start/stop/cleanup are job types on the
+  Phase 6 queue (`INTERACTIVE_BROWSER_START/STOP/CLEANUP`) executing against
+  the Phase 3 Docker driver and the Phase 9 Chromium adapter. The container
+  speaks the same token-guarded loopback runner protocol; the session hub
+  (`lib/interactive/runtime.ts`) bridges it to the web tier — one SSE
+  attachment per live session, bounded console/network/event rings, frame and
+  input rate limits with backpressure.
+- **API surface** (`app/api/browser-sessions`): create/start/stop, navigation
+  through the Phase 3 SSRF guard, typed allowlisted input, popup open/close
+  (rendered in-container), extension reload (re-verified binding), SSE event
+  stream with snapshot replay, PNG frame transport, screenshot artifacts with
+  retention, console/network rings, viewport, rate-limited keepalive.
+- **Entitlements reuse Phase 7**: plan gate (402), per-period session units
+  (429), per-user/org/global concurrency as retryable queue backpressure
+  (slots count only container-holding sessions, so an oversubscribed queue
+  drains instead of deadlocking).
+- **UI** (`/dashboard/browser/[sessionId]`): browser chrome + Console /
+  Network / Extension / Events / Screenshots panels over SSE + frames; entry
+  points on the extension detail and test-report pages appear only when a
+  stored package exists.

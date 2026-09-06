@@ -264,5 +264,32 @@ Organizations add a second ownership axis. The guarantees:
    config-gated, strongly authorized and audited, and executes no shell or
    Docker commands.
 
+## Interactive browser (Phase 11)
+
+The interactive browser runs the user's uploaded extension — untrusted code —
+in a disposable container and lets the user drive it. The added boundary:
+
+- **Exact package binding.** Sessions bind package id + version + SHA-256;
+  start and reload re-verify the hash from stored bytes and fail closed
+  (`package_unavailable` / `package_hash_mismatch`). No substitution.
+- **No raw browser channels.** No CDP/shell/eval/flags, no Docker socket, no
+  host mounts, no privileged or host-network containers. One token-guarded
+  loopback control port (the Phase 3 runner protocol) is the only door.
+- **Typed input allowlist, enforced twice.** Pointer/click/typing/key/scroll
+  actions only, with viewport-bounded coordinates, length caps, an allowed-key
+  list, payload size cap and per-session rate limit — validated on the web
+  tier and again inside the container.
+- **URL policy.** Navigation reuses the Phase 3 SSRF guard (schemes,
+  credentials, private/loopback/link-local literals, DNS-rebinding pinning).
+- **Frames, not video.** The browser is visible only as rate/size-limited PNG
+  frames served `private, no-store` + `nosniff` + CSP `sandbox`. The popup
+  renders inside the container and is never extracted into the web app.
+- **Tenant isolation and leak regression.** Cross-tenant access is 404 on
+  every route; session/artifact views are asserted (by test) to contain no
+  runtime internals (container ids, ports, tokens, temp paths).
+- **Hard limits.** Max lifetime cannot be extended by keepalives; idle →
+  IDLE → EXPIRED with visible reasons; every termination path removes the
+  container and the extracted package (asserted by unit and e2e suites).
+
 Security docs describe a system *designed to support* these properties; they
 make no certification claims.

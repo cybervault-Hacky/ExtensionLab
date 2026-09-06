@@ -113,7 +113,7 @@ export class EntitlementError extends Error {
   }
 }
 
-const KIND_LABEL: Record<UsageKind, string> = { analysis: "analysis", test_run: "automated test run", ai_request: "AI assistance" };
+const KIND_LABEL: Record<UsageKind, string> = { analysis: "analysis", test_run: "automated test run", ai_request: "AI assistance", interactive_browser: "interactive browser session" };
 
 function planName(planId: PlanId | null): string | null {
   return planId ? getPlan(planId).name : null;

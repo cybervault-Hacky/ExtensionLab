@@ -27,6 +27,45 @@ export interface BrowserStartResult {
   reason?: "startup_failed" | "automation_unavailable" | "extension_install_failed";
 }
 
+/**
+ * Phase 11 interactive commands. Adapters that cannot support an operation
+ * report `supported: false` instead of faking success; the host surfaces the
+ * limitation honestly.
+ */
+export interface InteractiveInputAction {
+  type:
+    | "pointer_move"
+    | "pointer_down"
+    | "pointer_up"
+    | "click"
+    | "double_click"
+    | "type_text"
+    | "key_press"
+    | "scroll";
+  x?: number;
+  y?: number;
+  button?: "left" | "right";
+  text?: string;
+  key?: string;
+  deltaX?: number;
+  deltaY?: number;
+  target?: "page" | "popup";
+}
+
+export interface InteractiveCommandResult {
+  ok: boolean;
+  supported: boolean;
+  message?: string;
+  data?: Record<string, unknown>;
+}
+
+export interface ExtensionLoadEvidence {
+  loaded: boolean;
+  /** What was actually observed, surfaced to the user as evidence. */
+  evidence: "background-context" | "manifest-only" | "none";
+  origin: string | null;
+}
+
 export interface SandboxBrowser {
   readonly browserId: SandboxBrowserId;
   /** Launches the browser and loads the unpacked extension at extensionPath. */
@@ -43,6 +82,22 @@ export interface SandboxBrowser {
   getPageUrl(): Promise<string>;
   stop(): Promise<void>;
   isStarted(): boolean;
+  // ----- Phase 11 interactive operations (optional per runtime) -----
+  /** Waits for real evidence that the unpacked extension registered. */
+  verifyExtensionLoaded?(timeoutMs: number): Promise<ExtensionLoadEvidence>;
+  setViewport?(width: number, height: number): Promise<InteractiveCommandResult>;
+  dispatchInput?(action: InteractiveInputAction): Promise<InteractiveCommandResult>;
+  goBack?(): Promise<InteractiveCommandResult>;
+  goForward?(): Promise<InteractiveCommandResult>;
+  openPopup?(popupPath: string): Promise<InteractiveCommandResult>;
+  closePopup?(): Promise<InteractiveCommandResult>;
+  /** Restarts the browser (same profile, same package) = real extension reload. */
+  restartExtension?(): Promise<InteractiveCommandResult>;
+  capturePopupScreenshot?(): Promise<Uint8Array | null>;
+  isPopupOpen?(): boolean;
+  currentViewport?(): { width: number; height: number };
+  /** Detected product/version after start (evidence, never client input). */
+  getBrowserVersion?(): { product: string; version: string } | null;
 }
 
 export interface BrowserAdapterOptions {
