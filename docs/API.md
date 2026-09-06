@@ -154,3 +154,23 @@ also the documented SDK/CLI contract (a thin wrapper over these endpoints).
 Breaking changes ship as `/api/v2` with a migration window; within a version
 fields are only added. Disable the public API entirely with
 `PUBLIC_API_ENABLED=false` (routes then fail closed with `API_DISABLED`).
+
+## Phase 13 admin & report endpoints
+
+Admin API (token-authenticated, read-heavy, no exec/CDP):
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/admin/workers` | fleet: registered workers, derived states |
+| POST | `/api/admin/workers/{ref}/state` | `{"desired":"drain"\|"disable"\|"ready"}` |
+| GET | `/api/admin/capacity` | queue depth, live sessions, slots, failures by class |
+| GET | `/api/admin/failures` | recent failures grouped by failure class |
+| GET | `/api/admin/metrics` | metric registry snapshot |
+| POST | `/api/admin/reconcile` | out-of-band orphan-container reconcile |
+
+User API:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/api/reports/{id}/pin` | pin a report (protects its artifacts from retention) |
+| DELETE | `/api/reports/{id}/pin` | unpin |

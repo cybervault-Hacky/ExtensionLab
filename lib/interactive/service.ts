@@ -90,6 +90,11 @@ export interface SessionRuntimeInfo {
   controlPort: number;
   runnerToken: string;
   tempDir: string;
+  /** Phase 13 §18: exact pinned image used, with digest when resolvable. */
+  imageRef?: string;
+  imageDigest?: string | null;
+  /** Phase 13 §12: server-resolved resource profile for this execution. */
+  resourceProfile?: string;
 }
 
 export function parseRuntimeInfo(row: InteractiveBrowserSessionRow): SessionRuntimeInfo | null {
@@ -107,6 +112,9 @@ export function parseRuntimeInfo(row: InteractiveBrowserSessionRow): SessionRunt
         controlPort: parsed.controlPort,
         runnerToken: parsed.runnerToken,
         tempDir: parsed.tempDir ?? "",
+        imageRef: typeof parsed.imageRef === "string" ? parsed.imageRef : undefined,
+        imageDigest: typeof parsed.imageDigest === "string" ? parsed.imageDigest : null,
+        resourceProfile: typeof parsed.resourceProfile === "string" ? parsed.resourceProfile : undefined,
       };
     }
     return null;
@@ -310,6 +318,14 @@ export function createInteractiveSession(user: UserRecord, input: CreateSessionI
   const config = getConfig().interactiveBrowser;
   if (!config.enabled) {
     throw new AppError("BROWSER_UNAVAILABLE", { message: "Interactive browser testing is disabled on this deployment." });
+  }
+  // Phase 13 §99: maintenance mode pauses NEW sessions only. Existing sessions
+  // keep running and drain naturally through their normal expiry/stop paths —
+  // maintenance never silently terminates a user's live browser.
+  if (getConfig().maintenanceMode) {
+    throw new AppError("BROWSER_UNAVAILABLE", {
+      message: "Browser sessions are paused for planned maintenance. Existing sessions keep running; new ones can start right after.",
+    });
   }
 
   const pkg = getOwnedPackage(user.id, input.packageId);
@@ -664,11 +680,33 @@ export async function navigateSession(userId: string, sessionId: string, operati
       }
       const response = await client.command("open-url", runtime.runnerToken, { url: validated.url }, 8000);
       if (!response.ok) throw new AppError("UNSAFE_URL", { message: response.message ?? "The URL was rejected by the browser environment." });
-      currentUrl = validated.url;
+      // Phase 13 §33: the pre-navigation check is not enough — HTTP redirects
+      // can land on internal hosts. Re-read the EFFECTIVE URL from the runner
+      // and re-validate it (DNS-pinned) before trusting the navigation.
+      const after = await client.command("get-url", runtime.runnerToken, {}, 6000);
+      const effectiveUrl = after.ok && typeof after.data?.url === "string" ? after.data.url : "";
+      if (effectiveUrl && effectiveUrl !== "about:blank") {
+        const revalidated = await validateTestUrlWithDns(effectiveUrl);
+        if (!revalidated.ok || !revalidated.url) {
+          appendSessionEvent(row.id, {
+            type: "navigation",
+            message: "Blocked: the site redirected to a URL that cannot be opened here.",
+            metadata: { url: effectiveUrl.slice(0, 512), op: "navigate", blocked: true },
+          });
+          throw new AppError("UNSAFE_URL", {
+            message:
+              revalidated.reason ??
+              "The site redirected to a private or internal address. The navigation was blocked.",
+          });
+        }
+        currentUrl = revalidated.url;
+      } else {
+        currentUrl = validated.url;
+      }
       appendSessionEvent(row.id, {
         type: "navigation",
-        message: `Navigated to ${validated.url.slice(0, 180)}`,
-        metadata: { url: validated.url.slice(0, 512), op: "navigate" },
+        message: `Navigated to ${(effectiveUrl || validated.url).slice(0, 180)}`,
+        metadata: { url: (effectiveUrl || validated.url).slice(0, 512), op: "navigate" },
       });
       break;
     }

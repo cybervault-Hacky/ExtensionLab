@@ -293,3 +293,20 @@ in a disposable container and lets the user drive it. The added boundary:
 
 Security docs describe a system *designed to support* these properties; they
 make no certification claims.
+
+## Phase 13 security additions
+
+- **Post-redirect URL re-validation** (§33): interactive navigation validates
+  the URL (SSRF/DNS-rebinding/metadata protections) **before** `open-url` and
+  re-validates the **effective URL read back from the runner afterwards**; a
+  redirect onto a private/loopback/metadata address is blocked and recorded.
+- **Reconciliation safety**: orphaned containers are matched by
+  ExtensionLab-owned labels (`extensionlab.environment` must match, owner must
+  be `interactive`) — a shared Docker daemon's foreign containers are never
+  deleted.
+- **Admin surface stays high-level**: workers/capacity/failures/metrics/
+  reconcile views plus drain/disable actions only — no shell, `docker exec`,
+  raw CDP or arbitrary browser commands.
+- **Worker trust boundary**: workers never trust client-provided paths,
+  container IDs or flags; the resource profile and image identity are
+  server-side decisions; the untrusted extension stays inside the sandbox.

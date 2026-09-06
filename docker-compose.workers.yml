@@ -1,0 +1,78 @@
+# Phase 13 multi-worker deployment overlay.
+#
+# Extends docker-compose.prod.yml with:
+#   - a migrate-once service (the runner holds the DB write lock, so concurrent
+#     or repeated runs serialize safely), and
+#   - N worker replicas with unique WORKER_IDs and a shared coordination store.
+#
+# Usage:
+#   cp .env.example .env                     # fill in real values
+#   docker compose -f docker-compose.prod.yml -f docker-compose.workers.yml --profile run-once build sandbox-image
+#   docker compose -f docker-compose.prod.yml -f docker-compose.workers.yml build
+#   docker compose -f docker-compose.prod.yml -f docker-compose.workers.yml run --rm migrate
+#   docker compose -f docker-compose.prod.yml -f docker-compose.workers.yml up -d --scale worker=3
+#
+# Honest limits (see docs/SCALING.md):
+# - This build ships the SQLite driver; on the shared `data` volume only one
+#   writer process pair should own the database at a time. For true
+#   multi-process fleets the PostgreSQL driver is the supported path — the
+#   platform fails closed rather than silently degrading.
+# - Each worker replica needs the Docker socket; workers are the ONLY services
+#   that get it. `web` and `migrate` never do.
+# - WORKER_ID must be unique per replica: `docker compose up --scale worker=3`
+#   sets hostname-based uniqueness only if you export WORKER_ID per instance;
+#   otherwise pin replicas explicitly (see the numbered examples below).
+
+services:
+  migrate:
+    build:
+      context: .
+      target: worker
+      args:
+        DOCKER_GID: ${DOCKER_GID:-999}
+    image: extensionlab-worker:latest
+    profiles: ["run-once"]
+    environment:
+      # Only what the migration runner reads (see scripts/db-migrate.mjs);
+      # YAML anchors do not cross files, so this is spelled out explicitly.
+      DATABASE_URL: sqlite:/data/extensionlab.sqlite
+    command: ["node", "scripts/db-migrate.mjs"]
+    volumes:
+      - data:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # Drop-in replacement for the single `worker` service with explicit
+  # identifiers. Use `--scale worker=3` together with WORKER_ID_TEMPLATE or
+  # define worker-a/worker-b/worker-c below for pinned ids.
+  worker:
+    build:
+      context: .
+      target: worker
+      args:
+        DOCKER_GID: ${DOCKER_GID:-999}
+    image: extensionlab-worker:latest
+    restart: unless-stopped
+    environment:
+      WORKER_MODE: external
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      WORKER_ID: ${WORKER_ID:-worker-1}
+      # Phase 13: heartbeats make the replica visible in /api/admin/workers;
+      # the coordination store shares rate limits and SSE frames across
+      # web+worker processes.
+      COORDINATION_PROVIDER: ${COORDINATION_PROVIDER:-memory}
+      REDIS_URL: ${REDIS_URL:-}
+      SANDBOX_TEMP_ROOT: /tmp/extensionlab-runtime
+    volumes:
+      - data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    tmpfs:
+      - /tmp/extensionlab-runtime:mode=0700,uid=10001,gid=10001
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 45s
+
+volumes:
+  data:

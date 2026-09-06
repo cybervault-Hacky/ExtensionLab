@@ -378,3 +378,25 @@ message so nobody deploys against an unsupported backend by accident.
 - **Env review**: every Phase 10 knob is documented in `.env.example`
   (organizations, public API, webhooks, coordination, SSO, fairness) with
   safe defaults and startup validation.
+
+
+## Phase 13: production scaling additions
+
+- **Environment model**: `APP_ENV=development|test|staging|production`.
+  Production validates strictly at boot (required secrets, storage config,
+  session key length) and **never silently falls back** — a missing S3 bucket,
+  a PostgreSQL URL on the SQLite-only build, or `COORDINATION_PROVIDER=redis`
+  without the `redis` package is a hard startup failure.
+- **Multi-worker compose**: see `docker-compose.workers.yml` — web, a
+  dedicated migrate-once service (the migration runner holds the DB write lock
+  via `BEGIN IMMEDIATE`, so concurrent runners serialize instead of racing),
+  and N worker replicas with unique `WORKER_ID`s. With SQLite, keep one writer
+  process pair per volume; the honest limits are documented in
+  [SCALING.md](SCALING.md).
+- **Object storage**: `STORAGE_PROVIDER=s3` with `S3_BUCKET`, optional
+  `S3_ENDPOINT`/`S3_PREFIX` (S3-compatible stores). Readiness performs a real
+  write+delete against the bucket.
+- **New e2e flags**: `EXTENSIONLAB_E2E_{DOCKER,POSTGRES,REDIS,STORAGE}=1`
+  (`tests/e2e/phase13-infra.e2e.test.ts`); unflagged they skip with a reason.
+- **New docs**: [WORKERS.md](WORKERS.md), [RUNTIME.md](RUNTIME.md),
+  [SCALING.md](SCALING.md), [OBSERVABILITY.md](OBSERVABILITY.md).

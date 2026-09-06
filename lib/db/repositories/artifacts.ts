@@ -91,8 +91,18 @@ export function listArtifactsForRun(testRunId: string): ArtifactRow[] {
 }
 
 export function listExpiredArtifacts(now = Date.now(), limit = 200): ArtifactRow[] {
+  // Phase 13: retention respects report pinning — artifacts linked to a test
+  // run whose report is pinned are never selected for deletion.
   return getDb()
-    .prepare("SELECT * FROM artifacts WHERE expires_at < ? ORDER BY expires_at ASC LIMIT ?")
+    .prepare(
+      `SELECT a.* FROM artifacts a
+       WHERE a.expires_at < ?
+         AND NOT EXISTS (
+           SELECT 1 FROM reports r
+           WHERE r.test_run_id = a.test_run_id AND r.pinned_at IS NOT NULL
+         )
+       ORDER BY a.expires_at ASC LIMIT ?`,
+    )
     .all(now, limit) as unknown as ArtifactRow[];
 }
 

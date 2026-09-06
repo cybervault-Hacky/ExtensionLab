@@ -326,3 +326,12 @@ the variable, then deleting the old endpoint.
 | `502 BILLING_PROVIDER_ERROR` on checkout | Provider API down or key revoked | `billing.provider_error` metric/log has the `errorCode`; the user message is generic and includes a reference id |
 | Account deletion fails with a billing error | Provider cancel failed | Retry; if the provider is down for long, cancel the subscription manually in the dashboard and retry deletion |
 | Duplicate audit rows after a replay | Not expected | The `billing_events` unique index prevents double application; check `billing.webhook_duplicate` and the event id |
+
+## Phase 13: fail-closed entitlements
+
+Entitlement lookups (effective plan, quotas, interactive limits) read the
+subscription store directly; there is **no fallback that widens access**. If
+the lookup fails (store unreachable), gated actions fail with an error — never
+a silent downgrade *or* upgrade. Verified by
+`tests/phase13/billing-failclosed.test.ts`. Heavy resource profiles are a plan
+entitlement evaluated server-side at container start.

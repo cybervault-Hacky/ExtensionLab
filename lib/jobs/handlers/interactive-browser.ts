@@ -17,7 +17,7 @@ import {
 } from "@/lib/db/repositories/browser-sessions";
 import { consumeReservationForResource } from "@/lib/db/repositories/quota";
 import { recordUsage } from "@/lib/db/repositories/usage";
-import { getInteractiveBrowserConcurrency } from "@/lib/billing/entitlements";
+import { getInteractiveBrowserConcurrency, getInteractiveBrowserResourceProfile } from "@/lib/billing/entitlements";
 import { AppError } from "@/lib/observability/errors";
 import { logger, recordMetric } from "@/lib/observability/logger";
 import type { SandboxDriver } from "@/lib/runtime/driver";
@@ -34,6 +34,7 @@ import {
   getInteractiveDriver,
 } from "@/lib/interactive/service";
 import { runInteractiveSweep } from "@/lib/interactive/sweep";
+import { breakerAllows, recordBreakerFailure, recordBreakerSuccess } from "@/lib/runtime/breaker";
 import { getInteractiveHub } from "@/lib/interactive/runtime";
 import type { InteractiveBrowserSessionRow } from "@/lib/db/schema/types";
 
@@ -110,6 +111,21 @@ export function createInteractiveBrowserStartHandler(
         }
         transitionSession(row.id, ["STARTING"], "QUEUED", { stateReason: "Retrying browser start." });
         row = getSessionById(row.id)!;
+      }
+
+      // Phase 13 §12: the resource profile comes from the plan entitlement —
+      // never from client input — and only tightens the container baseline.
+      const resourceProfile = getInteractiveBrowserResourceProfile(row.user_id);
+
+      // Phase 13 §26: circuit breaker — fail fast (before touching a slot)
+      // when this browser image repeatedly failed to start on this worker.
+      const breakerKey = "interactive:chromium";
+      const breaker = breakerAllows(breakerKey);
+      if (!breaker.allowed) {
+        throw new AppError("BROWSER_UNAVAILABLE", {
+          retryable: true,
+          message: "Browser starts are temporarily paused after repeated failures. The session stays queued.",
+        });
       }
 
       // Admit under the global/per-user/per-org limits (queue backpressure).
@@ -207,8 +223,23 @@ export function createInteractiveBrowserStartHandler(
           return { sessionId: row.id, status: "STOPPED", skipped: true };
         }
 
-        appendSessionEvent(row.id, { type: "extension_loading", message: "Loading the extension into the isolated browser." });
-        const handle = await driver.create(sandboxId, tempDir, runnerToken, { browserId: "chromium" });
+        appendSessionEvent(row.id, {
+          type: "extension_loading",
+          message: "Loading the extension into the isolated browser.",
+          metadata: { resourceProfile },
+        });
+        let handle;
+        try {
+          handle = await driver.create(sandboxId, tempDir, runnerToken, {
+            browserId: "chromium",
+            resourceProfile,
+            ownerKind: "interactive",
+            sessionId: row.id,
+          });
+        } catch (error) {
+          recordBreakerFailure(breakerKey);
+          throw error;
+        }
         containerId = handle.containerId;
         controlPort = handle.controlPort;
 
@@ -223,6 +254,9 @@ export function createInteractiveBrowserStartHandler(
               controlPort,
               runnerToken,
               tempDir,
+              imageRef: handle.imageRef,
+              imageDigest: handle.imageDigest ?? null,
+              resourceProfile,
             }),
           }) ?? getSessionById(row.id)!;
 
@@ -236,6 +270,7 @@ export function createInteractiveBrowserStartHandler(
           90_000,
         );
         if (!startResponse.ok) {
+          recordBreakerFailure(breakerKey);
           recordMetric("interactive.browser_start_failures", 1);
           await failSession(driver, row, "browser_start_failed", startResponse.message ?? "The browser failed to start.");
           throw new AppError("BROWSER_SESSION_START_FAILED", {
@@ -265,7 +300,15 @@ export function createInteractiveBrowserStartHandler(
             readyAt: Date.now(),
             touchActivity: true,
           }) ?? getSessionById(row.id)!;
-        appendSessionEvent(row.id, { type: "browser_ready", message: "Disposable browser is ready." });
+        recordBreakerSuccess(breakerKey);
+        appendSessionEvent(row.id, {
+          type: "browser_ready",
+          message: "Disposable browser is ready.",
+          metadata: {
+            imageRef: handleImageRef(handle) ?? "unknown",
+            imageDigest: handleImageDigest(handle) ?? "unknown",
+          },
+        });
         if (row.organization_id) {
           try {
             const { recordAuditEvent } = await import("@/lib/audit/service");
@@ -417,3 +460,11 @@ async function failSession(
 }
 
 export { setInteractiveDriverForTests };
+
+function handleImageRef(handle: { imageRef?: string }): string | null {
+  return typeof handle.imageRef === "string" ? handle.imageRef : null;
+}
+
+function handleImageDigest(handle: { imageDigest?: string | null }): string | null {
+  return typeof handle.imageDigest === "string" ? handle.imageDigest : null;
+}

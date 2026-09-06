@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { apiErrorResponse, assertEntitled, badRequest, requireApiUser, requireSameOrigin } from "@/lib/auth/api";
-import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
+import { enforceRateLimitAsync } from "@/lib/auth/rate-limit-policy";
 import { getClientIp } from "@/lib/runtime/api-helpers";
 import { isSafeId } from "@/lib/auth/validation";
 import { readOwnedPackageBytes, storeExtensionPackage } from "@/lib/packages/service";
@@ -35,7 +35,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       requireSameOrigin(request);
       const user = requireApiUser(request);
       const ip = getClientIp(request);
-      const rate = enforceRateLimit("testCreate", `${user.id}:${ip}`);
+      const rate = await enforceRateLimitAsync("testCreate", `${user.id}:${ip}`);
       if (!rate.ok) throw new AppError("RATE_LIMITED");
 
       // Accept both { packageId } JSON (reuse a stored, hash-verified package)

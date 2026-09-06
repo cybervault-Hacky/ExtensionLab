@@ -260,6 +260,15 @@ export function getInteractiveBrowserConcurrency(userId: string): number {
   return Math.max(1, getUserPlan(userId).interactiveBrowserConcurrency);
 }
 
+/**
+ * Phase 13 §12/§62: browser resource profile the user's plan admits. Only the
+ * top tier maps to `heavy`; every lookup failure or unknown plan maps to
+ * `standard` so entitlement errors can never widen resource usage.
+ */
+export function getInteractiveBrowserResourceProfile(userId: string): "standard" | "heavy" {
+  return getUserPlan(userId).id === "business" ? "heavy" : "standard";
+}
+
 /** Phase 11: per-session lifetime cap in minutes, clamped by the deployment ceiling. */
 export function getInteractiveBrowserMaxMinutes(userId: string): number {
   const planMinutes = getUserPlan(userId).interactiveBrowserMaxMinutes;

@@ -17,6 +17,11 @@ import {
   listRecentlyFinishedSessions,
 } from "@/lib/db/repositories/browser-sessions";
 import { recordAuditEvent } from "@/lib/db/repositories/audit";
+import {
+  listWorkerStatuses,
+  setWorkerDesiredStateByRef,
+  type WorkerDesiredState,
+} from "@/lib/jobs/worker-registry";
 import { AppError } from "@/lib/observability/errors";
 import { logger } from "@/lib/observability/logger";
 
@@ -132,4 +137,43 @@ export function cancelJobAdmin(requestId: string | null, jobId: string): { id: s
   recordAuditEvent({ userId: null, type: "admin_job_cancel", detail: jobId });
   logger.warn("admin.job_cancel", { requestId: requestId ?? undefined, jobId });
   return { id: jobId, status: getJobById(jobId)?.status ?? "unknown" };
+}
+
+/* ------------------------------------------------------------------------ */
+/* Phase 13: worker lifecycle admin (§55–§57)                                */
+/* ------------------------------------------------------------------------ */
+
+export function listWorkersAdmin() {
+  return listWorkerStatuses();
+}
+
+/**
+ * High-level worker control ONLY: drain (stop claiming, finish active),
+ * disable, re-enable. No shell, no exec, no per-job interference. Audited.
+ */
+export function setWorkerStateAdmin(requestId: string | null, ref: string, desired: WorkerDesiredState) {
+  const result = setWorkerDesiredStateByRef(ref, desired);
+  recordAuditEvent({ userId: null, type: "admin_worker_state", detail: `${result.ref}:${desired}` });
+  logger.warn("admin.worker_state", { requestId: requestId ?? undefined, workerRef: result.ref, desired });
+  return result;
+}
+
+/**
+ * Trigger reconciliation now: enqueues the idempotent interactive cleanup job
+ * (stale sessions, orphaned containers, expired artifacts). Audited.
+ */
+export function reconcileNowAdmin(requestId: string | null): { jobId: string | null } {
+  const { enqueueJob } = require("@/lib/jobs/queue") as typeof import("@/lib/jobs/queue");
+  const { job } = enqueueJob({
+    type: "INTERACTIVE_BROWSER_CLEANUP",
+    userId: null,
+    payload: { scope: "all" },
+    maxAttempts: 2,
+    priorityClass: "normal",
+    idempotencyKey: `ibrowser-cleanup:admin:${Math.floor(Date.now() / 30_000)}`,
+    skipBackpressure: true,
+  });
+  recordAuditEvent({ userId: null, type: "admin_reconcile", detail: job.id });
+  logger.warn("admin.reconcile", { requestId: requestId ?? undefined, jobId: job.id });
+  return { jobId: job.id };
 }

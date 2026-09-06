@@ -97,6 +97,8 @@ export interface FakeRunnerOptions {
   crashAfterMs?: number;
   /** Popup behaviour: whether the popup page loads. */
   popupSupported?: boolean;
+  /** Simulates a server-side redirect: open-url lands on this URL instead. */
+  redirectTo?: string;
   /**
    * Phase 12: queue of inspect-at element payloads (FIFO). An entry of null
    * means "no element at that point". When empty a deterministic button is
@@ -241,7 +243,7 @@ export class FakeRunner {
         };
       }
       case "open-url":
-        this.url = String(payload.url ?? "");
+        this.url = this.options.redirectTo ?? String(payload.url ?? "");
         this.emit({ type: "page", level: "info", source: "page", message: `Opening ${this.url}` });
         return { ok: true, status: this.started ? "running" : "idle", data: { url: this.url } };
       case "reload":
@@ -378,6 +380,10 @@ export class FakeDriver implements SandboxDriver {
   removedContainers: string[] = [];
   createdSources: string[] = [];
   runningChecks = new Map<string, boolean>();
+  /** Phase 13: label registry for reconciliation tests (containerId -> labels). */
+  ownedLabels = new Map<string, { name: string; labels: Record<string, string>; createdAt: number }>();
+  /** Phase 13: simulate container-create failures (failure injection). */
+  createFailure: { message: string } | null = null;
   private readonly runnerOptions: FakeRunnerOptions;
 
   /** Every created "container" runner inherits these simulated outcomes. */
@@ -390,6 +396,7 @@ export class FakeDriver implements SandboxDriver {
   }
 
   async create(sandboxId: string, sourcePath: string, runnerToken: string, options?: CreateSandboxOptions): Promise<ContainerHandle> {
+    if (this.createFailure) throw new Error(this.createFailure.message);
     const runner = new FakeRunner(runnerToken, this.runnerOptions);
     await runner.ready;
     this.runners.push(runner);
@@ -400,8 +407,20 @@ export class FakeDriver implements SandboxDriver {
     // Keep the runner alive until remove(); isRunning consults this map.
     (this as unknown as { runnerIds: Map<string, FakeRunner> }).runnerIds ??= new Map();
     (this as unknown as { runnerIds: Map<string, FakeRunner> }).runnerIds.set(runnerId, runner);
+    const containerId = `fakecontainer_${sandboxId}`;
+    // Phase 13: mirror the labels the real Docker driver applies.
+    this.ownedLabels.set(containerId, {
+      name: `extensionlab-${sandboxId}`,
+      labels: {
+        "extensionlab.environment": process.env.EL_FAKE_DRIVER_ENV ?? "test",
+        "extensionlab.session": options?.sessionId ?? sandboxId,
+        "extensionlab.browser": "chromium",
+        "extensionlab.owner": options?.ownerKind ?? "test",
+      },
+      createdAt: Date.now(),
+    });
     return {
-      containerId: `fakecontainer_${sandboxId}`,
+      containerId,
       controlPort: runner.port,
       controlClient: new ControlClient(runner.port),
       runnerToken,
@@ -409,8 +428,25 @@ export class FakeDriver implements SandboxDriver {
     };
   }
 
+  /** Phase 13 §15/§16: label-scoped listing for reconciliation. */
+  async listOwnedContainers(): Promise<Array<{ containerId: string; name: string; labels: Record<string, string>; createdAt?: number }>> {
+    return [...this.ownedLabels.entries()].map(([containerId, info]) => ({
+      containerId,
+      name: info.name,
+      labels: info.labels,
+      createdAt: info.createdAt,
+    }));
+  }
+
+  /** Test hook: pretend a container belongs to another environment. */
+  relabelEnvironment(containerId: string, environment: string): void {
+    const info = this.ownedLabels.get(containerId);
+    if (info) info.labels["extensionlab.environment"] = environment;
+  }
+
   async remove(handle: ContainerHandle): Promise<void> {
     this.removedContainers.push(handle.containerId);
+    this.ownedLabels.delete(handle.containerId);
     const map = (this as unknown as { runnerIds: Map<string, FakeRunner> }).runnerIds;
     for (const [id, runner] of map ?? []) {
       if (`fakecontainer_${id}` === handle.containerId) {

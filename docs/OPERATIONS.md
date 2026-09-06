@@ -358,3 +358,22 @@ asserts the fail-closed startup error when the driver is absent),
 signature and tamper verification). Unflagged, these suites skip with an
 explicit reason; flagged, missing infrastructure is a hard failure — never a
 fake pass.
+
+## Phase 13 operations
+
+- **Maintenance mode** (`MAINTENANCE_MODE=true`): new interactive sessions are
+  rejected with an honest "paused for planned maintenance" message; existing
+  sessions drain naturally (idle timeout/expiry). Readiness reports it.
+- **Worker fleet**: registry + heartbeats, derived states (READY/DRAINING/
+  UNHEALTHY/STOPPED), cooperative drain and administrative disable — see
+  [WORKERS.md](WORKERS.md). `GET /api/admin/workers` lists the fleet.
+- **Circuit breaker**: repeated container-start failures open the breaker;
+  the session stays queued (no slot burned) and recovers on probes. Thresholds
+  via `BREAKER_*` env.
+- **Out-of-band reconcile**: `POST /api/admin/reconcile` re-runs the
+  label-scoped orphan-container sweep (never crosses environments).
+- **Failure taxonomy**: `/api/admin/failures` groups failures by class
+  (USER_ERROR, BROWSER_ERROR, STORAGE_ERROR, …) — see
+  [OBSERVABILITY.md](OBSERVABILITY.md).
+- **Report pinning**: `POST/DELETE /api/reports/{id}/pin`; pinned reports keep
+  their artifacts out of retention deletion.

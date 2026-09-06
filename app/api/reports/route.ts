@@ -13,7 +13,7 @@ import { getOwnedTestRun } from "@/lib/db/repositories/test-runs";
 import { createReport, listReports } from "@/lib/db/repositories/reports";
 import type { ReportSort } from "@/lib/db/repositories/reports";
 import { parsePagination, parseSort, isSafeId } from "@/lib/auth/validation";
-import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
+import { enforceRateLimitAsync } from "@/lib/auth/rate-limit-policy";
 import { rateLimited } from "@/lib/auth/api";
 import { getClientIp } from "@/lib/runtime/api-helpers";
 
@@ -58,7 +58,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     requireSameOrigin(request);
     const user = requireApiUser(request);
-    const limit = enforceRateLimit("reportCreate", `${user.id}:${getClientIp(request)}`);
+    const limit = await enforceRateLimitAsync("reportCreate", `${user.id}:${getClientIp(request)}`);
     if (!limit.ok) throw rateLimited(limit.retryAfterSeconds);
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body) throw badRequest("Invalid request body.");

@@ -8,6 +8,17 @@ import { isAIEnabled } from "@/lib/ai/provider";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
+/** §54: a dependency probe must never hang — bound every check. */
+async function bounded<T>(work: () => Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  return Promise.race([
+    work(),
+    new Promise<T>((resolve) => {
+      const timer = setTimeout(() => resolve(fallback), timeoutMs);
+      timer.unref?.();
+    }),
+  ]);
+}
+
 export type CheckStatus = "ok" | "degraded" | "unavailable";
 
 export interface ReadinessReport {
@@ -17,7 +28,11 @@ export interface ReadinessReport {
     storage: { status: CheckStatus; provider: string };
     worker: { status: CheckStatus; mode: string; live: number; activeJobs: number };
     sandbox: { status: CheckStatus; available: boolean; reason?: string };
+    /** Phase 13: shared coordination store (rate limits/locks) when Redis-backed. */
+    coordination: { status: CheckStatus; provider: string };
   };
+  /** Phase 13 §99: new browser sessions are paused (existing ones drain). */
+  maintenanceMode: boolean;
   capabilities: {
     staticAnalysis: boolean;
     automatedTests: boolean;
@@ -53,9 +68,20 @@ export async function collectReadiness(): Promise<ReadinessReport> {
 
   let storageOk = false;
   try {
-    storageOk = (await getStorage().healthCheck()).ok;
+    storageOk = await bounded(async () => (await getStorage().healthCheck()).ok, 2000, false);
   } catch {
     storageOk = false;
+  }
+
+  let coordinationStatus: CheckStatus = "ok";
+  if (config.coordination.provider === "redis") {
+    try {
+      const { getCoordinationStore } = await import("@/lib/coordination");
+      const store = await getCoordinationStore();
+      coordinationStatus = await bounded(() => store.ping(), 1500, false) ? "ok" : "unavailable";
+    } catch {
+      coordinationStatus = "unavailable";
+    }
   }
 
   let workerStatus: CheckStatus = "unavailable";
@@ -94,6 +120,7 @@ export async function collectReadiness(): Promise<ReadinessReport> {
     storage: { status: storageOk ? "ok" : "unavailable", provider: config.storage.provider },
     worker: { status: workerStatus, mode: config.jobs.workerMode, live, activeJobs },
     sandbox: { status: sandboxAvailable ? "ok" : "unavailable", available: sandboxAvailable, reason: sandboxReason },
+    coordination: { status: coordinationStatus, provider: config.coordination.provider },
   };
 
   const core = [checks.database.status, checks.storage.status];
@@ -105,6 +132,7 @@ export async function collectReadiness(): Promise<ReadinessReport> {
 
   return {
     status,
+    maintenanceMode: config.maintenanceMode,
     checks,
     capabilities: {
       staticAnalysis: databaseOk,

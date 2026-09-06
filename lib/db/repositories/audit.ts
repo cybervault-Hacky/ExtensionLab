@@ -27,7 +27,10 @@ export type AuditEventType =
   | "billing_state_changed"
   // Phase 10 internal admin (jobs/queue only; never secrets or job payloads).
   | "admin_job_retry"
-  | "admin_job_cancel";
+  | "admin_job_cancel"
+  // Phase 13 internal admin (worker lifecycle + reconciliation).
+  | "admin_worker_state"
+  | "admin_reconcile";
 
 export function recordAuditEvent(input: {
   userId: string | null;

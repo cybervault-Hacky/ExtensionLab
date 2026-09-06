@@ -4,6 +4,7 @@ import { generateEventId } from "./ids";
 import { sanitizeError } from "./security";
 import { SandboxRuntimeError } from "./errors";
 import { getSandboxConfig, type SandboxConfig } from "./config";
+import { breakerAllows, recordBreakerFailure, recordBreakerSuccess } from "./breaker";
 import type {
   CreateSandboxResponse,
   ExtensionRuntimeStatus,
@@ -132,13 +133,28 @@ export class SandboxManager {
     const snapshot = this.requireSnapshot(sandboxId, token);
     if (this.statusIsRunning(snapshot.status)) return this.toPublicInfo(snapshot);
 
+    // Phase 13 §26: fail fast when this browser image repeatedly failed to
+    // start on this worker; the job retries with backoff instead of piling on.
+    const breakerKey = `tests:${snapshot.browserId}`;
+    const decision = breakerAllows(breakerKey);
+    if (!decision.allowed) {
+      this.setStatus(snapshot, "failed", "Browser starts temporarily paused after repeated failures.");
+      throw new SandboxRuntimeError(
+        "environment_unavailable",
+        "Browser starts are temporarily unavailable after repeated failures. The run will retry automatically.",
+        snapshot.referenceId,
+      );
+    }
+
     this.setStatus(snapshot, "creating", "Creating isolated environment");
     let handle: ContainerHandle;
     try {
       handle = await this.driver.create(snapshot.sandboxId, snapshot.sourcePath, snapshot.token, {
         browserId: snapshot.browserId,
+        ownerKind: "test",
       });
     } catch (error) {
+      recordBreakerFailure(breakerKey);
       const clean = sanitizeError(error instanceof Error ? error.message : "Docker driver failed.");
       this.setStatus(snapshot, "failed", clean.message);
       throw new SandboxRuntimeError(
@@ -157,6 +173,7 @@ export class SandboxManager {
       12000,
     );
     if (!response.ok) {
+      recordBreakerFailure(breakerKey);
       this.setStatus(snapshot, "failed", response.message ?? "Extension failed to load.");
       throw new SandboxRuntimeError(
         "extension_load_failed",
@@ -165,6 +182,7 @@ export class SandboxManager {
       );
     }
 
+    recordBreakerSuccess(breakerKey);
     await this.attachStream(snapshot, handle);
     this.setStatus(snapshot, "running", "Sandbox ready.");
     snapshot.startedAt = Date.now();

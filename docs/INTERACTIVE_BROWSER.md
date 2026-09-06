@@ -251,3 +251,20 @@ See `.env.example` (`INTERACTIVE_BROWSER_*`, `PLAN_*_INTERACTIVE_*`) for every
 knob: feature flag, global/per-org caps, per-plan concurrency/minutes/sessions,
 idle timeout + grace, frame interval and byte caps, artifact caps, input and
 keepalive rates, viewport bounds, and ring sizes.
+
+## Phase 13 additions
+
+- **Capacity slots**: global/per-org ceilings enforced by atomic slot claims —
+  the loser stays `QUEUED` (no phantom slot, no double browser). See
+  `tests/phase13/capacity.test.ts`.
+- **Worker failure recovery**: a worker dying mid-start leaves the session
+  recoverable; redelivery removes the leftover container and starts exactly
+  one browser. The user always gets an honest state plus "Start New Session"
+  — never a silent duplicate.
+- **Start circuit breaker**: repeated start failures pause new starts (session
+  stays queued, no slot consumed) and recover via probes.
+- **Maintenance mode / kill switch**: honest gating of *new* sessions only.
+- **Post-redirect URL re-validation** on every navigation (see
+  [SECURITY.md](SECURITY.md)).
+- **Timing**: `interactive.session_start_latency` (queue → READY) is recorded
+  per session and visible via `/api/admin/metrics`.

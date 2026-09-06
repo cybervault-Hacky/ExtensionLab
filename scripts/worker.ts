@@ -19,6 +19,12 @@ async function main(): Promise<void> {
   const migrations = listAppliedMigrations();
   logger.info("worker.boot", { component: "worker", migrations: migrations.length, ...describeConfig(config) });
 
+  // Phase 13: async infrastructure providers come up before jobs are claimed.
+  const { ensureStorageInitialized } = await import("@/lib/storage/storage");
+  await ensureStorageInitialized();
+  const { getCoordinationStore } = await import("@/lib/coordination");
+  await getCoordinationStore();
+
   const sandbox = await probeSandboxEnvironment(true);
   if (!sandbox.available) {
     logger.warn("worker.sandbox_unavailable", { component: "worker", reason: sandbox.reason });

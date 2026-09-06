@@ -124,4 +124,6 @@ export interface WorkerHealth {
   concurrency: number;
   sandboxAvailable: boolean | null;
   stopping: boolean;
+  /** Phase 13: operator-requested (or shutdown) drain in progress. */
+  draining?: boolean;
 }

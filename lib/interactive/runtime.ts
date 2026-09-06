@@ -1,5 +1,7 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { getConfig } from "@/lib/config/env";
+import { getCoordinationStoreSync } from "@/lib/coordination";
 import { ControlClient, isSafeRuntimeEvent, sanitizeRuntimeEvent } from "@/lib/runtime/control-client";
 import type { RuntimeEvent } from "@/types/runtime";
 import type { ConsoleEntryView, NetworkEntryView } from "@/types/interactive";
@@ -51,9 +53,17 @@ interface HubSession {
   inputTimestamps: number[];
 }
 
+function frameChannel(sessionId: string): string {
+  return `interactive:frames:${sessionId}`;
+}
+
 export class InteractiveSessionHub {
   private readonly sessions = new Map<string, HubSession>();
   private readonly detachers = new Map<string, () => void>();
+  /** Phase 13 §59: this hub's instance identity (echo suppression). */
+  private readonly instanceId = randomUUID();
+  /** Cross-instance frame subscriptions, torn down with the session entry. */
+  private readonly frameSubs = new Map<string, () => void>();
 
   private config() {
     return getConfig().interactiveBrowser;
@@ -81,6 +91,7 @@ export class InteractiveSessionHub {
         inputTimestamps: [],
       };
       this.sessions.set(info.sessionId, entry);
+      this.subscribeRemote(entry);
     }
     this.attach(entry);
     return entry;
@@ -181,6 +192,57 @@ export class InteractiveSessionHub {
         // Listener failures must never affect the session.
       }
     }
+    // Phase 13 §59: fan live frames out to other web instances so SSE works
+    // regardless of which instance the client is connected to. Fire-and-forget:
+    // cross-instance delivery is best-effort; replay stays DB-based.
+    this.publishRemote(entry, frame);
+  }
+
+  /** Forwards a frame produced by ANOTHER instance to local listeners only. */
+  private emitRemote(entry: HubSession, frame: HubFrame): void {
+    for (const listener of entry.listeners) {
+      try {
+        listener(frame);
+      } catch {
+        // Listener failures must never affect the session.
+      }
+    }
+  }
+
+  private publishRemote(entry: HubSession, frame: HubFrame): void {
+    const store = getCoordinationStoreSync();
+    if (!store?.publish) return;
+    const envelope = JSON.stringify({
+      origin: this.instanceId,
+      seq: frame.seq,
+      kind: frame.kind,
+      payload: frame.payload,
+    });
+    void store.publish(frameChannel(entry.info.sessionId), envelope).catch(() => undefined);
+  }
+
+  /** Subscribes this instance to a session's cross-instance frame channel. */
+  private subscribeRemote(entry: HubSession): void {
+    if (this.frameSubs.has(entry.info.sessionId)) return;
+    const store = getCoordinationStoreSync();
+    if (!store?.subscribe) return;
+    void store
+      .subscribe(frameChannel(entry.info.sessionId), (message) => {
+        try {
+          const parsed = JSON.parse(message) as { origin?: string; seq?: number; kind?: HubFrameKind; payload?: unknown };
+          if (parsed.origin === this.instanceId) return; // own echo
+          if (typeof parsed.seq !== "number" || !parsed.kind) return;
+          this.emitRemote(entry, { seq: parsed.seq, kind: parsed.kind, payload: parsed.payload });
+        } catch {
+          // Malformed frames are dropped; replay is DB-based anyway.
+        }
+      })
+      .then((unsubscribe) => {
+        // The entry may have been removed while subscribing.
+        if (!this.sessions.has(entry.info.sessionId)) unsubscribe();
+        else this.frameSubs.set(entry.info.sessionId, unsubscribe);
+      })
+      .catch(() => undefined);
   }
 
   /**
@@ -258,6 +320,11 @@ export class InteractiveSessionHub {
     if (detach) {
       detach();
       this.detachers.delete(sessionId);
+    }
+    const frameSub = this.frameSubs.get(sessionId);
+    if (frameSub) {
+      frameSub();
+      this.frameSubs.delete(sessionId);
     }
     const entry = this.sessions.get(sessionId);
     if (entry) {

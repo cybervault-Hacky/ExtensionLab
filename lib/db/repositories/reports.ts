@@ -65,6 +65,23 @@ export function getOrgReport(organizationId: string, id: string): ReportRow | nu
   return (row as unknown as ReportRow | undefined) ?? null;
 }
 
+/**
+ * Phase 13: pin/unpin a report (ownership-checked). A pinned report's linked
+ * artifacts are exempt from retention deletion until it is unpinned.
+ */
+export function setReportPinned(userId: string, id: string, pinned: boolean): ReportRow | null {
+  const db = getDb();
+  const owned = getOwnedReport(userId, id);
+  if (!owned) return null;
+  db.prepare("UPDATE reports SET pinned_at = ?, updated_at = ? WHERE id = ? AND user_id = ?").run(
+    pinned ? Date.now() : null,
+    Date.now(),
+    id,
+    userId,
+  );
+  return getReportById(id);
+}
+
 export function getReportById(id: string): ReportRow | null {
   const db = getDb();
   return (

@@ -15,6 +15,24 @@ export async function registerNode(): Promise<void> {
   const config = getConfig();
   logger.info("web.startup", { component: "web", ...describeConfig(config) });
 
+  // Phase 13: eagerly initialize async infrastructure providers (S3 storage,
+  // Redis coordination) so the first request never races their construction,
+  // and so a misconfigured provider fails loudly at boot instead of per-request.
+  try {
+    const { ensureStorageInitialized } = await import("@/lib/storage/storage");
+    await ensureStorageInitialized();
+  } catch (error) {
+    logger.error("web.storage_init_failed", { component: "web", detail: error instanceof Error ? error.message : String(error) });
+    if (config.appEnv === "production") throw error;
+  }
+  try {
+    const { getCoordinationStore } = await import("@/lib/coordination");
+    await getCoordinationStore();
+  } catch (error) {
+    logger.error("web.coordination_init_failed", { component: "web", detail: error instanceof Error ? error.message : String(error) });
+    if (config.appEnv === "production") throw error;
+  }
+
   if (config.jobs.workerMode === "embedded") {
     const { ensureEmbeddedWorker } = await import("@/lib/jobs/runtime");
     ensureEmbeddedWorker();

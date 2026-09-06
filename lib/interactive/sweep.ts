@@ -40,6 +40,8 @@ export interface SweepReport {
   failedOrphans: number;
   expiredArtifacts: number;
   cleanupFailures: number;
+  /** Phase 13 §15: ExtensionLab-owned containers with no live session. */
+  reconciledContainers: number;
 }
 
 function handleFor(row: InteractiveBrowserSessionRow): ContainerHandle | null {
@@ -63,6 +65,7 @@ export async function runInteractiveSweep(driver: SandboxDriver, now = Date.now(
     failedOrphans: 0,
     expiredArtifacts: 0,
     cleanupFailures: 0,
+    reconciledContainers: 0,
   };
 
   // 1. READY/ACTIVE sessions with no activity for the idle timeout → IDLE.
@@ -171,7 +174,14 @@ export async function runInteractiveSweep(driver: SandboxDriver, now = Date.now(
     report.expiredArtifacts++;
   }
 
-  // 6. Leftover temp directories for sessions that no longer exist.
+  // 6. Phase 13 §15: reconcile ExtensionLab-owned containers by label —
+  //    a container whose interactive session no longer holds it is removed.
+  //    NEVER touches containers owned by other deployments/environments.
+  await reconcileOrphanContainers(driver, now, report).catch(() => {
+    report.cleanupFailures++;
+  });
+
+  // 7. Leftover temp directories for sessions that no longer exist.
   await cleanupOrphanTempDirs(driver).catch(() => {
     report.cleanupFailures++;
   });
@@ -179,6 +189,56 @@ export async function runInteractiveSweep(driver: SandboxDriver, now = Date.now(
   if (report.cleanupFailures > 0) recordMetric("interactive.cleanup_failures", report.cleanupFailures);
   logger.info("interactive.sweep_completed", { component: "interactive", ...report });
   return report;
+}
+
+/**
+ * Label-scoped container reconciliation (Phase 13 §15/§16).
+ *
+ * Rules (all must hold before removal):
+ *  - the container carries extensionlab.sandbox=1 (our label)
+ *  - its environment label matches THIS deployment's environment
+ *  - its owner label is "interactive" (test sandboxes are managed in-process)
+ *  - it maps to no live slot-holding session, or to a live session bound to a
+ *    DIFFERENT container, and it is older than the startup grace window
+ */
+async function reconcileOrphanContainers(driver: SandboxDriver, now: number, report: SweepReport): Promise<void> {
+  if (typeof driver.listOwnedContainers !== "function") return;
+  const environment = getConfig().appEnv;
+  const owned = await driver.listOwnedContainers();
+  const live = listAdmittedSessions();
+  const bySessionId = new Map(live.map((row) => [row.id, row]));
+  const liveContainerIds = new Set<string>();
+  const liveContainerNames = new Set<string>();
+  for (const row of live) {
+    const runtime = parseRuntimeInfo(row);
+    if (runtime?.containerId) liveContainerIds.add(runtime.containerId);
+    if (runtime?.containerName) liveContainerNames.add(runtime.containerName);
+  }
+  const STARTUP_GRACE_MS = 3 * 60_000;
+  for (const container of owned) {
+    if (container.labels["extensionlab.environment"] !== environment) continue; // foreign deployment
+    if ((container.labels["extensionlab.owner"] ?? "test") !== "interactive") continue;
+    if (liveContainerIds.has(container.containerId) || liveContainerNames.has(container.name)) continue;
+    const session = bySessionId.get(container.labels["extensionlab.session"] ?? "");
+    if (session && (session.status === "CREATED" || session.status === "QUEUED" || session.status === "STARTING")) {
+      // A start may be in flight; only act after the grace window.
+      if (now - (container.createdAt ?? 0) < STARTUP_GRACE_MS) continue;
+    }
+    await driver.remove({
+      containerId: container.containerId,
+      controlPort: 0,
+      controlClient: new ControlClient(0),
+      runnerToken: "",
+      browserId: "chromium",
+    });
+    report.reconciledContainers++;
+    recordMetric("interactive.containers_reconciled", 1);
+    logger.warn("interactive.container_reconciled", {
+      component: "interactive",
+      containerName: container.name,
+      sessionId: session?.id,
+    });
+  }
 }
 
 async function cleanupOrphanTempDirs(_driver: SandboxDriver): Promise<void> {

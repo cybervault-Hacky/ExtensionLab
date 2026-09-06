@@ -175,6 +175,8 @@ export interface RegressionComparisonRow {
 
 export interface ReportRow {
   id: string;
+  /** Phase 13: set when the report is pinned (artifact retention respects it). */
+  pinned_at?: number | null;
   organization_id?: string | null;
   user_id: string;
   extension_id: string | null;
@@ -275,6 +277,14 @@ export interface WorkerRow {
   sandbox_available: number | null;
   sandbox_detail: string | null;
   stopping: number;
+  /** Phase 13: reported worker version (registration). */
+  version: string | null;
+  /** Phase 13: capabilities JSON (job types, browsers, resource profiles). */
+  capabilities_json: string | null;
+  /** Phase 13: first READY heartbeat timestamp (STARTING → READY evidence). */
+  ready_at: number | null;
+  /** Phase 13: operator scheduling intent: running | draining | disabled. */
+  desired_state: string;
 }
 
 export interface QuotaReservationRow {

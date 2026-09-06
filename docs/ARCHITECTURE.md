@@ -371,3 +371,22 @@ none of the new surfaces change that boundary.
   Network / Extension / Events / Screenshots panels over SSE + frames; entry
   points on the extension detail and test-report pages appear only when a
   stored package exists.
+
+## Phase 13 components
+
+- `lib/jobs/worker-registry.ts` — worker registration, heartbeats, derived
+  state, fleet summary (migration 009).
+- `lib/runtime/profiles.ts` / `docker-driver.ts` — server-controlled resource
+  profiles; hardened `docker create` args; ownership labels
+  (`extensionlab.owner`, `extensionlab.session`) and container listing for
+  reconciliation.
+- `lib/runtime/breaker.ts` — deterministic start circuit breaker.
+- `lib/storage/s3.ts` — S3-compatible provider behind the existing
+  `StorageProvider` interface (metadata stays in the DB).
+- `lib/observability/metrics-registry.ts`, `failure-class.ts` — metric
+  snapshot + 13-class failure taxonomy over the error catalog.
+- `lib/admin/capacity.ts` — queue/slot/failure rollups for the admin API.
+- Coordination store: optional `publish`/`subscribe` for cross-instance SSE
+  frames (memory bus in-process; Redis pub/sub in fleets).
+- No second queue, browser manager, artifact system or billing path — the
+  above extend the Phase 3–12 components in place.

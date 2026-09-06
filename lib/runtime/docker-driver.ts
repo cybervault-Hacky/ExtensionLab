@@ -3,10 +3,12 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { getSandboxConfig } from "./config";
 import { getBrowserRegistryConfig } from "@/lib/browsers/registry";
+import { getConfig } from "@/lib/config/env";
 import { isBrowserId, type BrowserId } from "@/lib/browsers/types";
 import { getFreePort } from "./ports";
 import { ControlClient } from "./control-client";
 import { waitForControl, type ContainerHandle, type CreateSandboxOptions, type SandboxDriver } from "./driver";
+import { RESOURCE_PROFILES, type ResourceProfile, type ResourceProfileId } from "./profiles";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,7 +24,96 @@ const execFileAsync = promisify(execFile);
  * limits, no privileged, no host network, no docker socket) is identical for
  * every browser — Firefox and Edge receive exactly the same hardening as
  * Chromium.
+ *
+ * Phase 13: `buildSandboxCreateArgs` is a pure function so the hardening
+ * baseline is unit-testable; every container carries ExtensionLab-owned
+ * labels (environment/session/worker/browser) used ONLY for internal
+ * reconciliation; resource profiles tighten limits per plan entitlement; and
+ * the exact image reference+digest is captured for reproducibility.
  */
+
+export interface SandboxLabels {
+  environment: string;
+  session: string;
+  worker?: string;
+  browser: string;
+  /** "interactive" (session-managed) or "test" (sandbox-manager-managed). */
+  owner?: string;
+}
+
+export interface BuildCreateArgsInput {
+  name: string;
+  image: string;
+  controlPort: number;
+  runnerToken: string;
+  sandboxId: string;
+  browserId: string;
+  network: "bridge" | "none";
+  runnerControlPort: number;
+  labels: SandboxLabels;
+  profile?: ResourceProfile;
+  /** Deployment-level defaults (memory/cpu) when no profile overrides them. */
+  defaultMemoryLimit: string;
+  defaultCpuLimit: string;
+}
+
+/**
+ * The complete `docker create` argument list. Pure: exported so tests can
+ * assert the hardening contract (§13/§71) without Docker.
+ */
+export function buildSandboxCreateArgs(input: BuildCreateArgsInput): string[] {
+  const profile = input.profile;
+  const memoryLimit = profile?.memoryLimit ?? input.defaultMemoryLimit;
+  const cpuLimit = profile?.cpuLimit ?? input.defaultCpuLimit;
+  const pidsLimit = profile?.pidsLimit ?? 200;
+  const shmSize = profile?.shmSize ?? "256m";
+  const labels: Array<[string, string]> = [
+    ["extensionlab.sandbox", "1"],
+    ["extensionlab.environment", input.labels.environment],
+    ["extensionlab.session", input.labels.session],
+    ["extensionlab.browser", input.labels.browser],
+  ];
+  if (input.labels.worker) labels.push(["extensionlab.worker", input.labels.worker]);
+  if (input.labels.owner) labels.push(["extensionlab.owner", input.labels.owner]);
+
+  const args = ["create", "--name", input.name];
+  for (const [key, value] of labels) args.push("--label", `${key}=${value}`);
+  args.push(
+    "--network",
+    input.network,
+    "--cap-drop",
+    "ALL",
+    "--security-opt",
+    "no-new-privileges",
+    "--user",
+    "node",
+    "--init",
+    "--pids-limit",
+    String(pidsLimit),
+    "--shm-size",
+    shmSize,
+    "--read-only",
+    "--tmpfs",
+    "/tmp:rw,noexec,nosuid,size=256m",
+    "--tmpfs",
+    "/home/node/.cache:rw,size=256m",
+    "-m",
+    memoryLimit,
+    "--cpus",
+    cpuLimit,
+    "-p",
+    `127.0.0.1:${input.controlPort}:${input.runnerControlPort}`,
+    "-e",
+    `RUNNER_TOKEN=${input.runnerToken}`,
+    "-e",
+    "SANDBOX_ID=" + input.sandboxId,
+    "-e",
+    `EXTENSIONLAB_BROWSER=${input.browserId}`,
+    input.image,
+  );
+  return args;
+}
+
 export class DockerSandboxDriver implements SandboxDriver {
   readonly name = "docker";
 
@@ -55,45 +146,29 @@ export class DockerSandboxDriver implements SandboxDriver {
     const name = `extensionlab-${sandboxId}`;
     const network = config.networkMode === "none" ? "none" : "bridge";
     const token = runnerToken;
+    const profileId: ResourceProfileId | undefined = options?.resourceProfile;
+    const profile = profileId ? RESOURCE_PROFILES[profileId] : undefined;
 
-    const args = [
-      "create",
-      "--name",
+    const args = buildSandboxCreateArgs({
       name,
-      "--label",
-      "extensionlab.sandbox=1",
-      "--network",
-      network,
-      "--cap-drop",
-      "ALL",
-      "--security-opt",
-      "no-new-privileges",
-      "--user",
-      "node",
-      "--init",
-      "--pids-limit",
-      "200",
-      "--shm-size",
-      "256m",
-      "--read-only",
-      "--tmpfs",
-      "/tmp:rw,noexec,nosuid,size=256m",
-      "--tmpfs",
-      "/home/node/.cache:rw,size=256m",
-      "-m",
-      config.defaultMemoryLimit,
-      "--cpus",
-      config.defaultCpuLimit,
-      "-p",
-      `127.0.0.1:${controlPort}:${config.runnerControlPort}`,
-      "-e",
-      `RUNNER_TOKEN=${token}`,
-      "-e",
-      "SANDBOX_ID=" + sandboxId,
-      "-e",
-      `EXTENSIONLAB_BROWSER=${browserId}`,
       image,
-    ];
+      controlPort,
+      runnerToken: token,
+      sandboxId,
+      browserId,
+      network,
+      runnerControlPort: config.runnerControlPort,
+      labels: {
+        environment: getConfig().appEnv,
+        session: options?.sessionId ?? sandboxId,
+        worker: process.env.WORKER_ID || configJobsWorkerId(),
+        browser: browserId,
+        owner: options?.ownerKind ?? "test",
+      },
+      profile,
+      defaultMemoryLimit: config.defaultMemoryLimit,
+      defaultCpuLimit: config.defaultCpuLimit,
+    });
 
     const created = await this.run(args);
     const containerId = created.stdout.trim();
@@ -105,12 +180,18 @@ export class DockerSandboxDriver implements SandboxDriver {
     await this.run(["cp", `${sourcePath}/.`, `${containerId}:/tmp/extension`]);
     await this.run(["start", containerId]);
 
+    // Phase 13 §18: record the exact image reference + content digest with the
+    // execution for reproducibility (best-effort; never blocks the session).
+    const imageIdentity = await this.imageIdentity(image).catch(() => null);
+
     const handle: ContainerHandle = {
       containerId,
       controlPort,
       controlClient: new ControlClient(controlPort),
       runnerToken,
       browserId,
+      imageRef: imageIdentity?.ref ?? image,
+      imageDigest: imageIdentity?.digest ?? null,
     };
     const ready = await waitForControl(handle, config.runnerHealthTimeoutMs);
     if (!ready) {
@@ -144,6 +225,44 @@ export class DockerSandboxDriver implements SandboxDriver {
     }
   }
 
+  /**
+   * Phase 13 §15/§16: list ExtensionLab-OWNED containers (label-scoped).
+   * Reconciliation only ever considers containers carrying our labels, and
+   * callers must additionally verify the environment label matches before
+   * removing anything — a foreign deployment's containers are untouchable.
+   */
+  async listOwnedContainers(): Promise<Array<{ containerId: string; name: string; labels: Record<string, string>; createdAt?: number }>> {
+    const output = await this.run([
+      "ps",
+      "-a",
+      "--filter",
+      "label=extensionlab.sandbox=1",
+      "--format",
+      "{{.ID}}\t{{.Names}}\t{{.Label \"extensionlab.environment\"}}\t{{.Label \"extensionlab.session\"}}\t{{.Label \"extensionlab.browser\"}}",
+    ]);
+    const lines = output.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+    return lines.map((line) => {
+      const [containerId, name, environment, session, browser] = line.split("\t");
+      return {
+        containerId,
+        name: name ?? "",
+        labels: {
+          "extensionlab.environment": environment ?? "",
+          "extensionlab.session": session ?? "",
+          "extensionlab.browser": browser ?? "",
+        },
+      };
+    });
+  }
+
+  /** Exact image reference and digest (§17/§18): immutable identity. */
+  async imageIdentity(image: string): Promise<{ ref: string; digest: string | null }> {
+    const result = await this.run(["image", "inspect", image, "--format", "{{index .RepoDigests 0}}"]);
+    const digestEntry = result.stdout.trim();
+    const digest = digestEntry.startsWith("sha256:") ? digestEntry : (digestEntry.split("@")[1] ?? null);
+    return { ref: image, digest: digest && digest.startsWith("sha256:") ? digest : null };
+  }
+
   /** Server-internal: pinned image for a browser runtime. */
   private imageForBrowser(browserId: BrowserId): string {
     if (browserId === "chromium" && !process.env.SANDBOX_IMAGE_CHROMIUM) {
@@ -159,6 +278,19 @@ export class DockerSandboxDriver implements SandboxDriver {
       timeout: 30000,
       env: { ...process.env, DOCKER_DEFAULT_PLATFORM: process.env.DOCKER_DEFAULT_PLATFORM },
     });
+  }
+}
+
+function parseDockerDate(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function configJobsWorkerId(): string | undefined {
+  try {
+    return getConfig().jobs.workerId;
+  } catch {
+    return undefined;
   }
 }
 

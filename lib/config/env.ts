@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { MAX_EXTENSION_SIZE } from "@/lib/extension/limits";
 
 export type AppEnv = "development" | "test" | "production";
-export type StorageProviderName = "local";
+export type StorageProviderName = "local" | "s3";
 export type EmailProviderName = "console" | "file" | "http" | "noop";
 type BillingProviderName = "stripe" | "fake" | "disabled";
 export type AIProviderName = "openai" | "fake" | "disabled";
@@ -27,6 +27,14 @@ export interface AppConfig {
   storage: {
     provider: StorageProviderName;
     path: string;
+    /** Phase 13 §27: S3-compatible object storage settings (provider "s3"). */
+    s3: {
+      bucket: string | null;
+      region: string | null;
+      endpoint: string | null;
+      prefix: string | null;
+      forcePathStyle: boolean;
+    };
   };
   sandbox: {
     image: string;
@@ -152,6 +160,8 @@ export interface AppConfig {
     /** SHA-256 of ADMIN_API_TOKEN; the raw token is never kept in config. */
     tokenHash: string | null;
   };
+  /** Phase 13 §99: maintenance mode pauses NEW browser sessions; existing drain. */
+  maintenanceMode: boolean;
   /** Phase 11: interactive browser sessions (see docs/INTERACTIVE_BROWSER.md). */
   interactiveBrowser: {
     enabled: boolean;
@@ -321,8 +331,12 @@ function buildConfig(): AppConfig {
     problems.push("SESSION_SECRET must be set (at least 32 characters) in production");
   }
 
-  const storageProvider = oneOf("STORAGE_PROVIDER", ["local"] as const, "local", problems);
+  const storageProvider = oneOf("STORAGE_PROVIDER", ["local", "s3"] as const, "local", problems);
   const storagePath = str("STORAGE_PATH") ?? join(process.cwd(), "data", "storage");
+  const s3Bucket = str("S3_BUCKET") ?? null;
+  if (storageProvider === "s3" && !s3Bucket) {
+    problems.push("S3_BUCKET is required when STORAGE_PROVIDER=s3");
+  }
 
   const sandboxMaxConcurrency = num(
     "SANDBOX_MAX_CONCURRENCY",
@@ -453,7 +467,17 @@ function buildConfig(): AppConfig {
     appUrl: appUrl.replace(/\/$/, ""),
     databasePath: resolveDatabasePath(problems),
     sessionSecret,
-    storage: { provider: storageProvider, path: storagePath },
+    storage: {
+      provider: storageProvider,
+      path: storagePath,
+      s3: {
+        bucket: s3Bucket,
+        region: str("S3_REGION") ?? null,
+        endpoint: str("S3_ENDPOINT") ?? null,
+        prefix: str("S3_PREFIX") ?? null,
+        forcePathStyle: bool("S3_FORCE_PATH_STYLE", false),
+      },
+    },
     sandbox: {
       image: str("SANDBOX_IMAGE") ?? "extensionlab-sandbox:local",
       maxConcurrency: sandboxMaxConcurrency,
@@ -575,6 +599,7 @@ function buildConfig(): AppConfig {
         tokenHash: token ? createHash("sha256").update(token).digest("hex") : null,
       };
     })(),
+    maintenanceMode: bool("MAINTENANCE_MODE", false),
     interactiveBrowser: {
       enabled: bool("INTERACTIVE_BROWSER_ENABLED", true),
       maxGlobalSessions: num("INTERACTIVE_BROWSER_MAX_GLOBAL", 4, problems, { min: 1, max: 256 }),

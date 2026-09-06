@@ -1,5 +1,7 @@
 import "server-only";
+import { EventEmitter } from "node:events";
 import { getConfig } from "@/lib/config/env";
+import { checkRateLimit } from "@/lib/auth/rate-limit";
 
 /**
  * Distributed coordination abstraction (Phase 10).
@@ -25,33 +27,54 @@ export interface CoordinationStore {
   readonly name: "memory" | "redis";
   /** Fixed-window counter. Cheap, deterministic, good enough for API limits. */
   rateLimit(key: string, limit: number, windowMs: number): Promise<CoordinationRateLimitResult>;
+  /** Phase 13 §54: bounded liveness probe for readiness reporting. */
+  ping(): Promise<boolean>;
   /**
    * Advisory mutex around `work`. Memory: process-local mutex map. Redis:
    * SET NX PX with a bounded wait. Never used for correctness-critical
    * invariants (those rely on database transactions).
    */
   withLock<T>(key: string, ttlMs: number, work: () => Promise<T>): Promise<T>;
+  /**
+   * Phase 13 §59: best-effort pub/sub for live SSE frames across web
+   * instances. Optional so custom stores can omit it; callers must treat
+   * these as fire-and-forget (live frames only — replay stays DB-based).
+   */
+  publish?(channel: string, message: string): Promise<void>;
+  subscribe?(
+    channel: string,
+    onMessage: (message: string) => void,
+  ): Promise<() => void>;
 }
 
 // ---------------------------------------------------------------------------
 
 class MemoryCoordinationStore implements CoordinationStore {
   readonly name = "memory" as const;
-  private readonly counters = new Map<string, { count: number; resetAt: number }>();
   private readonly locks = new Map<string, Promise<unknown>>();
+  /** Shared bus for same-process pub/sub (tests simulate multi-instance). */
+  private static readonly bus = new EventEmitter();
 
+  async ping(): Promise<boolean> {
+    return true;
+  }
+
+  async publish(channel: string, message: string): Promise<void> {
+    MemoryCoordinationStore.bus.emit(channel, message);
+  }
+
+  async subscribe(channel: string, onMessage: (message: string) => void): Promise<() => void> {
+    MemoryCoordinationStore.bus.on(channel, onMessage);
+    return () => MemoryCoordinationStore.bus.off(channel, onMessage);
+  }
+
+  /**
+   * Delegates to the SAME fixed-window implementation the per-process limiter
+   * uses, so `resetRateLimit` (tests, ops tooling) clears both paths at once
+   * and behavior is identical whether or not Redis is configured.
+   */
   async rateLimit(key: string, limit: number, windowMs: number): Promise<CoordinationRateLimitResult> {
-    const now = Date.now();
-    const bucket = this.counters.get(key);
-    if (!bucket || bucket.resetAt <= now) {
-      this.counters.set(key, { count: 1, resetAt: now + windowMs });
-      return { ok: true, remaining: limit - 1, retryAfterSeconds: 0 };
-    }
-    if (bucket.count >= limit) {
-      return { ok: false, remaining: 0, retryAfterSeconds: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)) };
-    }
-    bucket.count += 1;
-    return { ok: true, remaining: limit - bucket.count, retryAfterSeconds: 0 };
+    return checkRateLimit(key, limit, windowMs);
   }
 
   async withLock<T>(key: string, _ttlMs: number, work: () => Promise<T>): Promise<T> {
@@ -69,8 +92,31 @@ class MemoryCoordinationStore implements CoordinationStore {
 // package is absent the factory throws a descriptive error at startup.
 class RedisCoordinationStore implements CoordinationStore {
   readonly name = "redis" as const;
+  private static clientFactory: {
+    createClient: (options: { url: string }) => {
+      sendCommand: (args: Array<string | number>) => Promise<unknown>;
+      connect?: () => Promise<unknown>;
+      on: (event: string, handler: (...args: unknown[]) => void) => void;
+    };
+  } | null = null;
+  private static clientUrl = "";
+  private static subscriber: {
+    sendCommand: (args: Array<string | number>) => Promise<unknown>;
+  } | null = null;
+  /** channel -> handlers (fan-out to multiple local subscribers). */
+  private static readonly channels = new Map<string, Set<(message: string) => void>>();
   private readonly client: { sendCommand: (args: Array<string | number>) => Promise<unknown>; connect?: () => Promise<unknown> };
   private readonly prefix = "extensionlab:coord:";
+
+  private static dispatch(channel: string, message: string): void {
+    for (const handler of RedisCoordinationStore.channels.get(channel) ?? []) {
+      try {
+        handler(message);
+      } catch {
+        // Handler failures must never break the subscription.
+      }
+    }
+  }
 
   constructor(client: { sendCommand: (args: Array<string | number>) => Promise<unknown>; connect?: () => Promise<unknown> }) {
     this.client = client;
@@ -92,6 +138,8 @@ class RedisCoordinationStore implements CoordinationStore {
     const client = redisModule.createClient({ url });
     client.on("error", () => undefined);
     await client.connect?.();
+    RedisCoordinationStore.clientFactory = redisModule;
+    RedisCoordinationStore.clientUrl = url;
     return new RedisCoordinationStore(client);
   }
 
@@ -106,6 +154,40 @@ class RedisCoordinationStore implements CoordinationStore {
       return { ok: false, remaining: 0, retryAfterSeconds: Math.max(1, ttl) };
     }
     return { ok: true, remaining: limit - count, retryAfterSeconds: 0 };
+  }
+
+  async ping(): Promise<boolean> {
+    const reply = await this.client.sendCommand(["PING"]);
+    return reply === "PONG";
+  }
+
+  async publish(channel: string, message: string): Promise<void> {
+    await this.client.sendCommand(["PUBLISH", `${this.prefix}pub:${channel}`, message]);
+  }
+
+  async subscribe(channel: string, onMessage: (message: string) => void): Promise<() => void> {
+    if (!RedisCoordinationStore.subscriber) {
+      if (!RedisCoordinationStore.clientFactory) throw new Error("Redis pub/sub requires a connected RedisCoordinationStore.");
+      const subscriber = RedisCoordinationStore.clientFactory.createClient({ url: RedisCoordinationStore.clientUrl });
+      subscriber.on("message", (_channel: unknown, message: unknown) => {
+        if (typeof message !== "string") return;
+        RedisCoordinationStore.dispatch(String(_channel), message);
+      });
+      await subscriber.connect?.();
+      RedisCoordinationStore.subscriber = subscriber;
+    }
+    const namespaced = `${this.prefix}pub:${channel}`;
+    const handlers = RedisCoordinationStore.channels.get(namespaced) ?? new Set();
+    handlers.add(onMessage);
+    RedisCoordinationStore.channels.set(namespaced, handlers);
+    await RedisCoordinationStore.subscriber.sendCommand(["SUBSCRIBE", namespaced]);
+    return async () => {
+      handlers.delete(onMessage);
+      if (handlers.size === 0) {
+        RedisCoordinationStore.channels.delete(namespaced);
+        await RedisCoordinationStore.subscriber?.sendCommand(["UNSUBSCRIBE", namespaced]).catch(() => undefined);
+      }
+    };
   }
 
   async withLock<T>(key: string, ttlMs: number, work: () => Promise<T>): Promise<T> {

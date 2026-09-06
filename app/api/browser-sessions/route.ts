@@ -9,7 +9,7 @@ import {
   requireApiUser,
   requireSameOrigin,
 } from "@/lib/auth/api";
-import { enforceRateLimit } from "@/lib/auth/rate-limit-policy";
+import { enforceRateLimitAsync } from "@/lib/auth/rate-limit-policy";
 import { isSafeId } from "@/lib/auth/validation";
 import { createInteractiveSession, toSessionView } from "@/lib/interactive/service";
 import { listSessionsForUser } from "@/lib/db/repositories/browser-sessions";
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     try {
       requireSameOrigin(request);
       const user = requireApiUser(request);
-      const rate = enforceRateLimit("browserSessionCreate", `${user.id}:${getClientIp(request)}`);
+      const rate = await enforceRateLimitAsync("browserSessionCreate", `${user.id}:${getClientIp(request)}`);
       if (!rate.ok) {
         throw new ApiError(429, "rate_limited", "Too many browser sessions created. Please wait a moment.");
       }
