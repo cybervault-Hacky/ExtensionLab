@@ -74,6 +74,8 @@ export interface BillingStateView {
     testRuns: UsageBucket;
     aiRequests?: UsageBucket;
   };
+  /** Phase 14: verified payment history (no instrument data). */
+  payments?: Array<{ id: string; planId: PlanId; amount: number; currency: string; status: string; createdAt: number }>;
   plans: PlanView[];
 }
 

@@ -390,3 +390,18 @@ none of the new surfaces change that boundary.
   frames (memory bus in-process; Redis pub/sub in fleets).
 - No second queue, browser manager, artifact system or billing path — the
   above extend the Phase 3–12 components in place.
+
+
+## Phase 14 component: Razorpay adapter
+
+`lib/billing/providers/razorpay.ts` — the only place Razorpay's API,
+encoding, statuses and event names appear. Implements the existing
+`BillingProvider` interface (plus `rebuildCheckoutSession` for providers
+without idempotent create, and `verifyCheckoutConfirmation` for the relayed
+checkout signature). Subscriptions map onto Razorpay subscription objects on
+configured Razorpay plans; statuses normalize in the adapter
+(`created→incomplete`, `authenticated/active→active`, `pending→past_due`,
+`halted→unpaid`, `cancelled→canceled`, `expired→incomplete_expired`).
+`billing_payments` (migration 011) is the idempotent payments ledger written
+only from verified events. Everything else — entitlement service, quotas,
+plan catalog, webhook ledger, audit — is reused unchanged.

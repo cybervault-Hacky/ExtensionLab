@@ -400,3 +400,21 @@ message so nobody deploys against an unsupported backend by accident.
   (`tests/e2e/phase13-infra.e2e.test.ts`); unflagged they skip with a reason.
 - **New docs**: [WORKERS.md](WORKERS.md), [RUNTIME.md](RUNTIME.md),
   [SCALING.md](SCALING.md), [OBSERVABILITY.md](OBSERVABILITY.md).
+
+
+## Phase 14: Razorpay deployment checklist
+
+1. Razorpay account in **test mode** first; plans created per the catalog
+   (Pro ₹799 → `79900` paise, Business ₹2499 → `249900` paise).
+2. `.env`: `BILLING_PROVIDER=razorpay`, `RAZORPAY_KEY_ID/KEY_SECRET/
+   WEBHOOK_SECRET`, `RAZORPAY_PLAN_ID_PRO/BUSINESS`, `BILLING_CURRENCY=inr`,
+   catalog amounts. All secrets server-side; never `NEXT_PUBLIC_*`.
+3. **Build environment** must also carry `BILLING_PROVIDER=razorpay` (or
+   `CSP_RAZORPAY=1`) so the Edge CSP allows the checkout origins
+   (see [RAZORPAY.md](RAZORPAY.md#content-security-policy)).
+4. Webhook (HTTPS only): `https://<domain>/api/billing/webhook` with the
+   configured secret and the lifecycle events enabled.
+5. Run `node scripts/db-migrate.mjs` (migration 011 adds the payments
+   ledger).
+6. Rotation: update `RAZORPAY_*` secrets and the webhook secret together,
+   then restart. Secret rotation never requires a database change.

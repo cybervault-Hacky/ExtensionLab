@@ -36,6 +36,12 @@ export const ERROR_CATALOG = {
   SUBSCRIPTION_STATE_INVALID: { status: 409, message: "This action is not possible in the subscription's current state.", retryable: false },
   WEBHOOK_SIGNATURE_INVALID: { status: 400, message: "The webhook signature could not be verified.", retryable: false },
   PAYMENT_REQUIRED: { status: 402, message: "This feature requires a paid plan.", retryable: false },
+  // Phase 14 Razorpay billing.
+  BILLING_PROVIDER_UNAVAILABLE: { status: 503, message: "The payment provider is unavailable right now. Please try again shortly.", retryable: true },
+  BILLING_CONFIGURATION_ERROR: { status: 500, message: "Billing is misconfigured on this deployment. The team has been notified.", retryable: false },
+  PAYMENT_VERIFICATION_FAILED: { status: 400, message: "We couldn't verify this payment. Nothing was activated.", retryable: false },
+  PAYMENT_MISMATCH: { status: 400, message: "The payment details don't match the expected plan. Nothing was activated.", retryable: false },
+  DUPLICATE_PAYMENT: { status: 409, message: "This payment was already processed.", retryable: false },
   // Phase 9 cross-browser testing.
   BROWSER_RUNTIME_UNAVAILABLE: { status: 503, message: "This browser runtime is not available on this deployment.", retryable: false },
   BROWSER_NOT_SUPPORTED: { status: 400, message: "This browser is not supported for testing.", retryable: false },

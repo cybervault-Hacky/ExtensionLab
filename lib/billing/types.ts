@@ -105,7 +105,7 @@ export function isSubscriptionStatus(value: unknown): value is SubscriptionStatu
   return typeof value === "string" && (SUBSCRIPTION_STATUSES as readonly string[]).includes(value);
 }
 
-export const BILLING_PROVIDER_NAMES = ["stripe", "fake", "disabled"] as const;
+export const BILLING_PROVIDER_NAMES = ["stripe", "razorpay", "fake", "disabled"] as const;
 export type BillingProviderName = (typeof BILLING_PROVIDER_NAMES)[number];
 
 /** Provider-agnostic snapshot of a subscription as the provider reports it. */
@@ -191,11 +191,34 @@ export interface CreateCheckoutInput {
   cancelUrl: string;
   /** Provider idempotency key; repeated clicks return the same session. */
   idempotencyKey: string;
+  /**
+   * Phase 14 §87: catalog price (minor units) + currency for the requested
+   * plan. Adapters that can read the provider plan's price MUST verify it
+   * matches and fail closed (PAYMENT_MISMATCH) otherwise. Server-supplied
+   * only; never client input.
+   */
+  expectedAmount?: number | null;
+  expectedCurrency?: string;
 }
 
 export interface CheckoutSessionResult {
   id: string;
   url: string;
+  /**
+   * Phase 14: providers whose checkout opens client-side (Razorpay Standard
+   * Checkout) return the SAFE public configuration the browser needs. It
+   * contains only non-secret values (public key id + provider subscription
+   * reference). Redirect-style providers (Stripe) leave this undefined.
+   */
+  checkout?: {
+    provider: "razorpay";
+    keyId: string;
+    subscriptionId: string;
+    planName: string;
+    currency: string;
+    /** Minor-unit amount for display/confirmation only; the provider charges its own plan. */
+    amount: number | null;
+  };
 }
 
 /**
@@ -208,12 +231,27 @@ export interface BillingProvider {
   readonly capabilities: ProviderCapabilities;
   ensureCustomer(input: { userId: string; email: string; name: string }): Promise<{ customerId: string }>;
   createCheckoutSession(input: CreateCheckoutInput): Promise<CheckoutSessionResult>;
+  /**
+   * Phase 14 §9/§91: providers without idempotent create (Razorpay) rebuild
+   * the safe checkout configuration for an existing open session instead of
+   * creating a second one. Returning undefined falls through to create.
+   */
+  rebuildCheckoutSession?(input: { sessionId: string; planId: PlanId; priceId: string; successUrl: string }): Promise<CheckoutSessionResult | undefined>;
   createPortalSession(input: { customerId: string; returnUrl: string }): Promise<{ url: string }>;
   getCheckoutSession(sessionId: string): Promise<ProviderCheckoutSession | null>;
   getSubscription(subscriptionId: string): Promise<ProviderSubscription | null>;
   cancelSubscription(subscriptionId: string, options: { atPeriodEnd: boolean }): Promise<ProviderSubscription>;
   reactivateSubscription(subscriptionId: string): Promise<ProviderSubscription>;
   listInvoices(customerId: string, limit: number): Promise<ProviderInvoice[]>;
+  /**
+   * Phase 14 §13/§14: verifies a client-relayed checkout confirmation
+   * (Razorpay: HMAC-SHA256 over `${razorpay_payment_id}|${razorpay_order_id}`
+   * or `${razorpay_payment_id}|${razorpay_subscription_id}` with the key
+   * secret). Providers without a relayed-confirmation flow leave this
+   * undefined. Verification alone never grants entitlements; it only lets the
+   * confirm path stop early on a fabricated callback.
+   */
+  verifyCheckoutConfirmation?(input: { orderId?: string | null; paymentId: string; subscriptionId?: string | null; signature: string }): boolean;
   /**
    * Verifies the webhook signature and parses the payload. Throws
    * `BillingError("WEBHOOK_SIGNATURE_INVALID")` for missing/invalid/stale

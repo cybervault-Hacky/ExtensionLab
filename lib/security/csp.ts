@@ -22,23 +22,33 @@ export interface CspOptions {
   development?: boolean;
   /** Emits `upgrade-insecure-requests` (production behind TLS). */
   upgradeInsecureRequests?: boolean;
+  /**
+   * Phase 14: the minimum extra allowance for Razorpay Standard Checkout
+   * (script + its API/iframe origins). Decided at BUILD time — the Edge
+   * middleware cannot read runtime provider configuration — so set
+   * BILLING_PROVIDER=razorpay (or CSP_RAZORPAY=1) in the BUILD environment of
+   * a Razorpay deployment. No secrets are involved; this only widens origins
+   * for the checkout popup.
+   */
+  razorpayCheckout?: boolean;
 }
 
 export function buildContentSecurityPolicy(options: CspOptions): string {
   const scriptSources = [`'self'`, `'nonce-${options.nonce}'`, `'strict-dynamic'`];
   if (options.development) scriptSources.push(`'unsafe-eval'`);
+  if (options.razorpayCheckout) scriptSources.push("https://checkout.razorpay.com");
 
   const directives = [
     `default-src 'self'`,
     `script-src ${scriptSources.join(" ")}`,
     `style-src 'self' 'unsafe-inline'`,
-    `img-src 'self' data: blob:`,
+    `img-src 'self' data: blob:${options.razorpayCheckout ? " https://*.razorpay.com" : ""}`,
     `font-src 'self' data:`,
-    `connect-src 'self'`,
+    `connect-src 'self'${options.razorpayCheckout ? " https://api.razorpay.com https://checkout.razorpay.com" : ""}`,
     `media-src 'none'`,
     `object-src 'none'`,
     `worker-src 'self' blob:`,
-    `frame-src 'none'`,
+    `frame-src 'none'${options.razorpayCheckout ? " https://api.razorpay.com https://checkout.razorpay.com https://www.razorpay.com" : ""}`,
     `frame-ancestors 'self'`,
     `base-uri 'self'`,
     `form-action 'self'`,

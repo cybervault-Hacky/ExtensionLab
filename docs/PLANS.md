@@ -217,3 +217,15 @@ exactly like personal plans; concurrency is finally clamped by
 `ORG_MAX_CONCURRENCY`. Seat counts are provisioned values — billing changes
 them through the provider abstraction, and where a provider cannot update
 seats automatically an operator applies the change (documented limitation).
+
+
+## Phase 14: direct purchase (Razorpay)
+
+Paid plans are directly purchasable when Razorpay (or Stripe) is configured —
+the pricing page shows **Buy Now**, never "Contact Us", for purchasable
+plans. Prices come from the same catalog that enforces quotas; the Razorpay
+plan mapping (`RAZORPAY_PLAN_ID_*`) must match the catalog amount or checkout
+fails closed with `PAYMENT_MISMATCH`. Entitlements activate automatically on
+verified payment — no approval step. Cancel keeps paid access until the
+period ends; downgrades/expiry never delete data. See
+[RAZORPAY.md](RAZORPAY.md).

@@ -1,6 +1,6 @@
 import { getDb, transaction } from "../client";
 import { generateDbId } from "../ids";
-import type { BillingCustomerRow, BillingEventRow, CheckoutSessionRow, SubscriptionRow } from "../schema/types";
+import type { BillingCustomerRow, BillingEventRow, BillingPaymentRow, CheckoutSessionRow, SubscriptionRow } from "../schema/types";
 import type { BillingEventType, PlanId, SubscriptionStatus } from "@/lib/billing/types";
 
 /*
@@ -318,4 +318,61 @@ export function expireStaleCheckouts(before: number): number {
 
 export function deleteOldCheckouts(before: number): number {
   return Number(getDb().prepare("DELETE FROM checkout_sessions WHERE created_at < ? AND status <> 'open'").run(before).changes);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 14: payments ledger (idempotent, verified events only)
+// ---------------------------------------------------------------------------
+
+/**
+ * Records a payment exactly once per (provider, provider_payment_id).
+ * Duplicate webhook deliveries and concurrent confirmations converge on a
+ * single row; `created` tells the caller whether this was the first write.
+ */
+export function recordPaymentIfNew(input: {
+  userId: string;
+  provider: string;
+  providerPaymentId: string;
+  providerInvoiceId?: string | null;
+  providerSubscriptionId?: string | null;
+  planId: string;
+  amount: number;
+  currency: string;
+  status: "paid" | "failed";
+  createdAt?: number;
+}): { created: boolean } {
+  const db = getDb();
+  const existing = db
+    .prepare("SELECT 1 FROM billing_payments WHERE provider = ? AND provider_payment_id = ?")
+    .get(input.provider, input.providerPaymentId);
+  if (existing) return { created: false };
+  db.prepare(
+    `INSERT INTO billing_payments (
+       id, user_id, provider, provider_payment_id, provider_invoice_id, provider_subscription_id,
+       plan_id, amount, currency, status, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    generateDbId("pay"),
+    input.userId,
+    input.provider,
+    input.providerPaymentId,
+    input.providerInvoiceId ?? null,
+    input.providerSubscriptionId ?? null,
+    input.planId,
+    Math.round(input.amount),
+    input.currency.toLowerCase(),
+    input.status,
+    input.createdAt ?? Date.now(),
+  );
+  return { created: true };
+}
+
+export function listPaymentsForUser(userId: string, limit = 20): BillingPaymentRow[] {
+  return getDb()
+    .prepare("SELECT * FROM billing_payments WHERE user_id = ? ORDER BY created_at DESC LIMIT ?")
+    .all(userId, Math.min(Math.max(limit, 1), 100)) as unknown as BillingPaymentRow[];
+}
+
+export function deleteOldBillingPayments(before: number): number {
+  return Number(getDb().prepare("DELETE FROM billing_payments WHERE created_at < ?").run(before).changes);
 }

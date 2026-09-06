@@ -335,3 +335,26 @@ the lookup fails (store unreachable), gated actions fail with an error — never
 a silent downgrade *or* upgrade. Verified by
 `tests/phase13/billing-failclosed.test.ts`. Heavy resource profiles are a plan
 entitlement evaluated server-side at container start.
+
+
+## Phase 14: Razorpay
+
+`BILLING_PROVIDER=razorpay` adds a second real adapter behind the same
+provider interface (Stripe untouched). See [RAZORPAY.md](RAZORPAY.md) for the
+full operator guide. Key properties:
+
+- **Self-serve**: `/pricing` → Buy Now → Razorpay Standard Checkout →
+  server-side verification (relayed checkout signature + provider lookup) →
+  webhook confirmation → automatic activation. No manual step.
+- **Razorpay subscriptions** (not hand-rolled recurring billing); the local
+  DB never assumes success just because checkout opened.
+- **Fail-closed configuration**: missing credentials are startup errors in
+  every environment; the fake provider is still development/test-only.
+- **Price-change protection**: the adapter verifies the Razorpay plan's
+  amount/currency against the catalog and rejects mismatches
+  (`PAYMENT_MISMATCH`) before creating anything.
+- **Payments ledger** (migration 011): normalized, idempotent payment records
+  (`billing_payments`) power the dashboard's payment history; no card data
+  ever reaches ExtensionLab.
+- **Capabilities are honest**: no hosted portal, no reactivate (Razorpay has
+  no resume-scheduled-cancel); cancel is at cycle end.

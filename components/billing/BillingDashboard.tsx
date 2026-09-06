@@ -1,7 +1,7 @@
 "use client";
 
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { CalendarClock, CreditCard, ExternalLink, Receipt, RotateCcw, ShieldCheck, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -9,6 +9,7 @@ import { Card } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
 import { Progress } from "@/components/ui/Progress";
 import { PlanCard } from "./PlanCard";
+import { openRazorpayCheckout } from "./RazorpayCheckout";
 import { describeState, formatDate, formatMoney, type ApiErrorPayload, type BillingStateView, type InvoiceView, type PlanId, type UsageBucket } from "./types";
 
 interface Feedback {
@@ -24,6 +25,7 @@ async function readError(response: Response, fallback: string): Promise<Feedback
 
 export function BillingDashboard() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [state, setState] = useState<BillingStateView | null>(null);
   const [invoices, setInvoices] = useState<InvoiceView[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -84,12 +86,31 @@ export function BillingDashboard() {
         setFeedback(await readError(response, "Checkout could not be started."));
         return;
       }
-      const { url } = (await response.json()) as { url: string };
-      window.location.assign(url);
+      const data = (await response.json()) as { url: string; checkout?: { provider: "razorpay"; keyId: string; subscriptionId: string; planName: string; currency: string } };
+      if (data.checkout?.provider === "razorpay") {
+        const plan = state?.plans.find((entry) => entry.id === planId);
+        const outcome = await openRazorpayCheckout({
+          keyId: data.checkout.keyId,
+          subscriptionId: data.checkout.subscriptionId,
+          planName: plan?.name ?? data.checkout.planName,
+          currency: data.checkout.currency,
+        });
+        if (outcome.kind === "script-error") {
+          setFeedback({ kind: "error", message: "The secure payment window could not be opened. Check your connection and try again." });
+          return;
+        }
+        if (outcome.kind === "dismissed") {
+          setFeedback({ kind: "info", message: "Checkout was cancelled. Your plan has not changed." });
+          return;
+        }
+        router.push(`/dashboard/billing/return?session_id=${encodeURIComponent(outcome.response.razorpay_subscription_id ?? data.checkout.subscriptionId)}&payment_id=${encodeURIComponent(outcome.response.razorpay_payment_id)}&signature=${encodeURIComponent(outcome.response.razorpay_signature)}`);
+        return;
+      }
+      window.location.assign(data.url);
     } finally {
       setBusy(null);
     }
-  }, []);
+  }, [router, state]);
 
   const openPortal = useCallback(async () => {
     setBusy("portal");
@@ -264,7 +285,7 @@ export function BillingDashboard() {
                     : canBuy
                       ? { label: `Upgrade to ${plan.name}`, onClick: () => void startCheckout(plan.id), loading: busy === "checkout", disabled: busy !== null }
                       : plan.id !== "free" && !plan.purchasable
-                        ? { label: "Contact us", href: "mailto:hello@extensionlab.dev", variant: "secondary" }
+                        ? { label: "Not yet available", disabled: true, variant: "secondary" }
                         : undefined
                 }
                 footnote={plan.id !== "free" && plan.purchasable ? "Cancel any time. Billed monthly." : null}
@@ -273,6 +294,30 @@ export function BillingDashboard() {
           })}
         </div>
       </section>
+
+      {state.payments && state.payments.length > 0 ? (
+        <Card>
+          <div className="flex items-center gap-2">
+            <Receipt className="h-5 w-5 text-[var(--text-secondary)]" aria-hidden="true" />
+            <h3 className="text-base font-semibold tracking-tight">Payment history</h3>
+          </div>
+          <ul className="mt-4 divide-y divide-[var(--border)]">
+            {state.payments.map((payment) => (
+              <li key={payment.id} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
+                <div>
+                  <p className="font-medium">{state.plans.find((plan) => plan.id === payment.planId)?.name ?? payment.planId} plan</p>
+                  <p className="text-xs text-[var(--text-secondary)]">{formatDate(payment.createdAt)}</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="tabular-nums">{formatMoney(payment.amount, payment.currency)}</span>
+                  <Badge tone={payment.status === "paid" ? "success" : "error"}>{payment.status === "paid" ? "Paid" : "Failed"}</Badge>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 text-xs text-[var(--text-secondary)]">Card details are handled by the payment provider and never stored by ExtensionLab.</p>
+        </Card>
+      ) : null}
 
       {state.enabled && state.provider?.invoices ? (
         <Card>

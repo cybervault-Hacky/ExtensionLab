@@ -355,6 +355,21 @@ export interface BillingEventRow {
   processed_at: number | null;
 }
 
+/** Phase 14: normalized payment written from verified provider events only. */
+export interface BillingPaymentRow {
+  id: string;
+  user_id: string;
+  provider: string;
+  provider_payment_id: string;
+  provider_invoice_id: string | null;
+  provider_subscription_id: string | null;
+  plan_id: string;
+  amount: number;
+  currency: string;
+  status: string;
+  created_at: number;
+}
+
 export interface CheckoutSessionRow {
   id: string;
   organization_id?: string | null;

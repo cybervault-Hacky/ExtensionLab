@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import type { ApiErrorPayload, BillingStateView } from "./types";
 
-type Phase = "checking" | "complete" | "pending" | "expired" | "unknown" | "error";
+type Phase = "checking" | "complete" | "pending" | "expired" | "unknown" | "error" | "failed";
 
 const POLL_MS = 2500;
 const MAX_POLLS = 24; // ~1 minute
@@ -20,6 +20,12 @@ const MAX_POLLS = 24; // ~1 minute
 export function CheckoutReturn() {
   const params = useSearchParams();
   const sessionId = params.get("session_id");
+  // Phase 14 Razorpay relay: passed through to the confirm API on the first
+  // poll, where the signature is verified server-side (§13/§14).
+  const relay =
+    sessionId && params.get("payment_id") && params.get("signature")
+      ? { razorpayPaymentId: params.get("payment_id")!, razorpaySubscriptionId: sessionId, razorpaySignature: params.get("signature")! }
+      : null;
   const [phase, setPhase] = useState<Phase>("checking");
   const [plan, setPlan] = useState<string | null>(null);
   const [reference, setReference] = useState<string | null>(null);
@@ -39,13 +45,14 @@ export function CheckoutReturn() {
         const response = await fetch("/api/billing/confirm", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ sessionId }),
+          body: JSON.stringify(relay && polls.current === 1 ? { sessionId, ...relay } : { sessionId }),
         });
         if (cancelled) return;
         if (!response.ok) {
           const body = (await response.json().catch(() => null)) as ApiErrorPayload | null;
           setReference(body?.error?.referenceId ?? null);
-          setPhase("error");
+          if (body?.error?.errorCode === "PAYMENT_VERIFICATION_FAILED") setPhase("failed");
+          else setPhase("error");
           return;
         }
         const data = (await response.json()) as { status: "pending" | "complete" | "expired" | "unknown"; billing: BillingStateView };
@@ -106,6 +113,15 @@ export function CheckoutReturn() {
             <AlertTriangle className="h-8 w-8 text-[var(--status-warning)]" aria-hidden="true" />
             <h2 className="mt-4 text-xl font-semibold tracking-tight">This checkout expired</h2>
             <p className="mt-2 text-sm text-[var(--text-secondary)]">No payment was taken. You can start again from the billing page.</p>
+          </>
+        ) : null}
+        {phase === "failed" ? (
+          <>
+            <AlertTriangle className="h-8 w-8 text-[var(--status-error)]" aria-hidden="true" />
+            <h2 className="mt-4 text-xl font-semibold tracking-tight">We couldn&apos;t verify this payment</h2>
+            <p className="mt-2 text-sm text-[var(--text-secondary)]">
+              The confirmation didn&apos;t pass verification, so nothing was activated and your current plan is unchanged. If you were charged, contact support with the reference below.
+            </p>
           </>
         ) : null}
         {phase === "unknown" ? (

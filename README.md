@@ -851,3 +851,12 @@ DEPLOYMENT, OPERATIONS, ARCHITECTURE, PLANS and `.env.example`).
 
 Not yet specified. The repository is currently configured for private or
 internal use.
+
+
+## Billing (Phase 14)
+
+Self-serve subscriptions with Razorpay: pick a plan on `/pricing`, click
+**Buy Now**, pay in Razorpay's secure checkout, and your plan activates
+automatically — server-verified payment + webhook confirmation, no manual
+approval. Cards never touch ExtensionLab; cancel any time (paid access runs
+to the period end). Setup: [docs/RAZORPAY.md](docs/RAZORPAY.md).

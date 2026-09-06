@@ -377,3 +377,21 @@ fake pass.
   [OBSERVABILITY.md](OBSERVABILITY.md).
 - **Report pinning**: `POST/DELETE /api/reports/{id}/pin`; pinned reports keep
   their artifacts out of retention deletion.
+
+
+## Phase 14 billing operations
+
+- **Webhook health**: `billing_events` is the ledger — rows stuck in
+  `processing` mean a sync backlog (webhook returned 5xx; Razorpay retries).
+  `billing.webhook_received/rejected/duplicate` metrics show delivery health.
+- **Alert candidates** (configure in your own stack; none are pre-wired):
+  webhook failure spike, `billing.payment_verification_failed` spike,
+  `BILLING_PROVIDER_UNAVAILABLE` persistence, stuck `processing` events,
+  any `BILLING_CONFIGURATION_ERROR`.
+- **Halted/past-due subscriptions**: paid entitlements survive only
+  `BILLING_PAST_DUE_GRACE_DAYS` (default 7) after the provider reports a
+  failed/halted charge; then Free limits apply. Data is never deleted.
+- **Duplicate webhook** deliveries are safe: event ids are claimed in the
+  ledger; re-delivery returns 200 without re-applying state.
+- **Out-of-order events** are safe: older snapshots cannot overwrite newer
+  subscription state (timestamp guard).

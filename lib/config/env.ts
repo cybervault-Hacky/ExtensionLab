@@ -15,7 +15,7 @@ import { MAX_EXTENSION_SIZE } from "@/lib/extension/limits";
 export type AppEnv = "development" | "test" | "production";
 export type StorageProviderName = "local" | "s3";
 export type EmailProviderName = "console" | "file" | "http" | "noop";
-type BillingProviderName = "stripe" | "fake" | "disabled";
+type BillingProviderName = "stripe" | "razorpay" | "fake" | "disabled";
 export type AIProviderName = "openai" | "fake" | "disabled";
 export type WorkerMode = "embedded" | "external" | "disabled";
 
@@ -84,6 +84,12 @@ export interface AppConfig {
     deletionPolicy: "cancel_immediately" | "cancel_at_period_end";
     /** Days a past_due subscription keeps paid entitlements while the provider retries payment. */
     pastDueGraceDays: number;
+    /**
+     * Phase 14 Razorpay credentials. Server-only; never returned by
+     * describeConfig(), never sent to the client, never logged. `keyId` is
+     * the one intentionally-public value (Razorpay Standard Checkout).
+     */
+    razorpay: { keyId: string | null; keySecret: string | null; webhookSecret: string | null };
   };
   /**
    * Phase 8 AI assistance (see docs/AI.md). The API key is read here and
@@ -394,7 +400,7 @@ function buildConfig(): AppConfig {
   // explicitly; production never falls back to it.
   const billingProvider = oneOf(
     "BILLING_PROVIDER",
-    ["stripe", "fake", "disabled"] as const,
+    ["stripe", "razorpay", "fake", "disabled"] as const,
     isProduction ? "disabled" : "fake",
     problems,
   );
@@ -402,8 +408,20 @@ function buildConfig(): AppConfig {
   const billingWebhookSecret = str("BILLING_WEBHOOK_SECRET") ?? null;
   const billingCurrency = (str("BILLING_CURRENCY") ?? "inr").toLowerCase();
   if (!/^[a-z]{3}$/.test(billingCurrency)) problems.push("BILLING_CURRENCY must be a 3-letter ISO 4217 code");
-  const proPriceId = str("BILLING_PRO_PRICE_ID") ?? null;
-  const businessPriceId = str("BILLING_BUSINESS_PRICE_ID") ?? null;
+  // Phase 14: Razorpay plan ids (RAZORPAY_PLAN_ID_<PLAN>) take precedence for
+  // the razorpay provider; the generic BILLING_<PLAN>_PRICE_ID remains the
+  // shared mapping slot so planIdForPriceId stays provider-agnostic.
+  const razorpayKeyId = str("RAZORPAY_KEY_ID") ?? null;
+  const razorpayKeySecret = str("RAZORPAY_KEY_SECRET") ?? null;
+  const razorpayWebhookSecret = str("RAZORPAY_WEBHOOK_SECRET") ?? null;
+  const razorpayPlanPro = str("RAZORPAY_PLAN_ID_PRO") ?? null;
+  const razorpayPlanBusiness = str("RAZORPAY_PLAN_ID_BUSINESS") ?? null;
+  let proPriceId = str("BILLING_PRO_PRICE_ID") ?? null;
+  let businessPriceId = str("BILLING_BUSINESS_PRICE_ID") ?? null;
+  if (billingProvider === "razorpay") {
+    if (razorpayPlanPro) proPriceId = razorpayPlanPro;
+    if (razorpayPlanBusiness) businessPriceId = razorpayPlanBusiness;
+  }
   const proAmount = str("BILLING_PRO_AMOUNT") !== undefined ? num("BILLING_PRO_AMOUNT", 0, problems, { min: 0 }) : null;
   const businessAmount =
     str("BILLING_BUSINESS_AMOUNT") !== undefined ? num("BILLING_BUSINESS_AMOUNT", 0, problems, { min: 0 }) : null;
@@ -416,6 +434,20 @@ function buildConfig(): AppConfig {
     }
     if (isProduction && billingSecretKey && !/^(sk|rk)_live_/.test(billingSecretKey)) {
       problems.push("BILLING_SECRET_KEY must be a live Stripe key in production");
+    }
+  }
+  if (billingProvider === "razorpay") {
+    // Fail closed in EVERY environment: selecting razorpay without the full
+    // credential set is a configuration error, never a silent fallback to
+    // fake billing (§5).
+    if (!razorpayKeyId) problems.push("RAZORPAY_KEY_ID is required when BILLING_PROVIDER=razorpay");
+    if (!razorpayKeySecret) problems.push("RAZORPAY_KEY_SECRET is required when BILLING_PROVIDER=razorpay");
+    if (!razorpayWebhookSecret) problems.push("RAZORPAY_WEBHOOK_SECRET is required when BILLING_PROVIDER=razorpay");
+    if (!proPriceId && !businessPriceId) {
+      problems.push("At least one of RAZORPAY_PLAN_ID_PRO / RAZORPAY_PLAN_ID_BUSINESS is required when BILLING_PROVIDER=razorpay");
+    }
+    if (razorpayKeyId && !/^(rzp_(test|live)_)[A-Za-z0-9]+$/.test(razorpayKeyId)) {
+      problems.push("RAZORPAY_KEY_ID must be a Razorpay key id (rzp_test_… / rzp_live_…)");
     }
   }
   if (billingProvider === "fake" && isProduction) {
@@ -521,6 +553,7 @@ function buildConfig(): AppConfig {
       fakeWebhookSecret,
       deletionPolicy,
       pastDueGraceDays: num("BILLING_PAST_DUE_GRACE_DAYS", 7, problems, { min: 0, max: 60 }),
+      razorpay: { keyId: razorpayKeyId, keySecret: razorpayKeySecret, webhookSecret: razorpayWebhookSecret },
     },
     ai: {
       provider: aiProvider,
@@ -697,6 +730,8 @@ export function describeConfig(config: AppConfig = getConfig()): Record<string, 
       proConfigured: Boolean(config.billing.priceIds.pro),
       businessConfigured: Boolean(config.billing.priceIds.business),
       deletionPolicy: config.billing.deletionPolicy,
+      // Phase 14: presence only — key/secret values never leave the server.
+      razorpayConfigured: Boolean(config.billing.razorpay.keyId && config.billing.razorpay.keySecret && config.billing.razorpay.webhookSecret),
     },
     ai: {
       provider: config.ai.provider,

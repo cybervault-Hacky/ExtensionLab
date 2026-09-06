@@ -9,9 +9,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * POST /api/billing/confirm { sessionId } → { status, billing }
+ * POST /api/billing/confirm { sessionId, razorpay_*? } → { status, billing }
  * Polled by the checkout return page. It only consults the provider about a
  * session this user created; the URL parameter alone never grants anything.
+ * The optional Razorpay checkout relay is signature-verified server-side
+ * before any provider lookup (a fabricated callback is rejected, and a valid
+ * one still only *asks* the provider for the truth).
  */
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
@@ -21,7 +24,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (!limit.ok) throw rateLimited(limit.retryAfterSeconds);
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body || typeof body.sessionId !== "string") throw badRequest("Missing checkout session.");
-    const result = await confirmCheckout(user, body.sessionId);
+    const result = await confirmCheckout(user, {
+      sessionId: body.sessionId,
+      razorpayPaymentId: body.razorpayPaymentId,
+      razorpayOrderId: body.razorpayOrderId,
+      razorpaySubscriptionId: body.razorpaySubscriptionId,
+      razorpaySignature: body.razorpaySignature,
+    });
     return NextResponse.json({ status: result.status, billing: buildBillingState(user.id) }, { headers: { "cache-control": "no-store" } });
   } catch (error) {
     return apiErrorResponse(error, request);

@@ -310,3 +310,25 @@ make no certification claims.
 - **Worker trust boundary**: workers never trust client-provided paths,
   container IDs or flags; the resource profile and image identity are
   server-side decisions; the untrusted extension stays inside the sandbox.
+
+
+## Phase 14: payment security
+
+- **No card data**: Razorpay Checkout handles payment instruments inside its
+  own iframe; ExtensionLab stores only provider ids, plan, integer amounts
+  and statuses. There are no card/CVV fields anywhere in the schema.
+- **Client confirms nothing**: `POST /api/billing/checkout` accepts only a
+  plan id; prices resolve server-side from the catalog. The checkout relay
+  from the browser is HMAC-verified server-side before anything else, and a
+  valid relay still only triggers a provider lookup for the truth.
+  Entitlements change exclusively via verified provider state.
+- **Webhook authenticity**: `x-razorpay-signature` (HMAC-SHA256) is verified
+  over the exact raw body before parsing; the shared endpoint never trusts an
+  unverified payload regardless of source.
+- **User binding**: checkouts, confirmations and subscriptions are owned by
+  the authenticated user; one user can never confirm or activate another
+  user's checkout (`getOwnedCheckoutRecord`).
+- **Secrets**: `RAZORPAY_KEY_SECRET` / `RAZORPAY_WEBHOOK_SECRET` are
+  server-only and excluded from `describeConfig()`, API responses, logs,
+  error messages and the client bundle (build-time audit in the Phase 14
+  verification run). Only the public key id reaches the browser.
