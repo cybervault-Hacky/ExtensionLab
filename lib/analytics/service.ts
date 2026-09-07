@@ -2,7 +2,7 @@ import { getDb } from "@/lib/db/client";
 import type { OverviewAnalytics, ExtensionAnalytics, MetricValue } from "./types";
 
 function metric(value: number | null, status: "available" | "insufficient_data" | "no_data", unit?: string, previous?: number | null): MetricValue {
-  const change = (value !== null && previous !== null) ? (value - previous) : null;
+  const change = (value !== null && previous != null) ? (value - previous) : null;
   return { value, status, unit, previous: previous ?? null, change, note: status === "insufficient_data" ? "Not enough data" : status === "no_data" ? "No data available yet" : undefined };
 }
 
