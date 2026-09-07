@@ -52,12 +52,20 @@ export async function POST(request: NextRequest, context: { params: Promise<{ te
         browsers?: unknown;
         variables?: unknown;
         testUrl?: unknown;
+        provider?: unknown;
+        repository?: unknown;
+        commitSha?: unknown;
+        branch?: unknown;
+        tag?: unknown;
+        workflow?: unknown;
+        workflowRunId?: unknown;
+        pullRequestNumber?: unknown;
       } | null;
       if (body === null) throw new AppError("INVALID_INPUT", { message: "A JSON body is required." });
 
       // Safe parameter allowlist (§52): every field is validated server-side
       // and unknown fields are rejected outright.
-      const allowedKeys = new Set(["version", "browser", "browsers", "variables", "testUrl"]);
+      const allowedKeys = new Set(["version", "browser", "browsers", "variables", "testUrl", "provider", "repository", "commitSha", "branch", "tag", "workflow", "workflowRunId", "pullRequestNumber"]);
       for (const key of Object.keys(body)) {
         if (!allowedKeys.has(key)) throw new AppError("INVALID_INPUT", { message: `Unknown parameter "${key}".` });
       }
@@ -105,8 +113,28 @@ export async function POST(request: NextRequest, context: { params: Promise<{ te
         testUrl = body.testUrl.trim() === "" ? undefined : body.testUrl.trim();
       }
 
+      // Phase 16: bounded CI metadata validation (never arbitrary payloads).
+      function boundedString(val: unknown, max = 256): string | undefined {
+        if (val === undefined || val === null) return undefined;
+        if (typeof val !== "string") throw new AppError("INVALID_INPUT", { message: "CI metadata fields must be strings." });
+        const s = val.trim();
+        if (s.length === 0) return undefined;
+        if (s.length > max) throw new AppError("INVALID_INPUT", { message: "CI metadata value too long." });
+        return s;
+      }
+      const ciMetadata = {
+        provider: boundedString(body.provider, 64),
+        repository: boundedString(body.repository, 256),
+        commitSha: boundedString(body.commitSha, 40),
+        branch: boundedString(body.branch, 128),
+        tag: boundedString(body.tag, 128),
+        workflow: boundedString(body.workflow, 256),
+        workflowRunId: boundedString(body.workflowRunId, 64),
+        pullRequestNumber: (typeof body.pullRequestNumber === "number" && Number.isInteger(body.pullRequestNumber) && body.pullRequestNumber > 0) ? body.pullRequestNumber : undefined,
+      };
+
       const idempotencyKey = request.headers.get("idempotency-key");
-      const fingerprint = `${apiContext.principal.organizationId}:${testId}:${version ?? "current"}:${browsers.join(",")}:${testUrl ?? ""}:${JSON.stringify(variables ?? {})}`;
+      const fingerprint = `${apiContext.principal.organizationId}:${testId}:${version ?? "current"}:${browsers.join(",")}:${testUrl ?? ""}:${JSON.stringify(variables ?? {})}:${JSON.stringify(ciMetadata)}`;
 
       const result = await withIdempotency(
         { type: "organization", id: apiContext.principal.organizationId },
@@ -115,10 +143,10 @@ export async function POST(request: NextRequest, context: { params: Promise<{ te
         fingerprint,
         async () => {
           const suiteRow = getDb().prepare("SELECT id FROM saved_test_suites WHERE id = ? AND organization_id = ?").get(testId, apiContext.principal.organizationId);
-          const suiteResult = suiteRow !== undefined ? await runStudioSuite(viewer, testId, { source: "ci", ...(testUrl ? { testUrl } : {}) }) : null;
+          const suiteResult = suiteRow !== undefined ? await runStudioSuite(viewer, testId, { source: "ci", ...(testUrl ? { testUrl } : {}), ciMetadata }) : null;
           const matrixResult =
             suiteResult === null && browsers.length > 1
-              ? await runStudioTestMatrix(viewer, testId, { source: "ci", browsers, ...(version ? { version } : {}), ...(testUrl ? { testUrl } : {}), ...(variables ? { variables } : {}) })
+              ? await runStudioTestMatrix(viewer, testId, { source: "ci", browsers, ...(version ? { version } : {}), ...(testUrl ? { testUrl } : {}), ...(variables ? { variables } : {}), ciMetadata })
               : null;
           const singleResult =
             suiteResult === null && matrixResult === null
@@ -128,6 +156,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ te
                   ...(browsers.length === 1 ? { browserId: browsers[0] } : {}),
                   ...(testUrl ? { testUrl } : {}),
                   ...(variables ? { variables } : {}),
+                  ciMetadata,
                 })
               : null;
           const created =

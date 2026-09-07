@@ -93,6 +93,16 @@ export interface TestRunRow {
   browser_version?: string | null;
   engine?: string | null;
   matrix_run_id?: string | null;
+  /** Phase 16: CI execution metadata (nullable for non-CI runs). */
+  provider?: string | null;
+  repository?: string | null;
+  commit_sha?: string | null;
+  branch?: string | null;
+  tag?: string | null;
+  workflow?: string | null;
+  workflow_run_id?: string | null;
+  pull_request_number?: number | null;
+  ci_status?: string | null;
 }
 
 /** Phase 9: browser matrix run (parent of per-browser child executions). */
@@ -723,4 +733,153 @@ export interface SessionEvidenceRow {
   browser_version: string | null;
   report_id: string | null;
   created_at: number;
+}
+
+
+// Phase 17 — Community / Social
+export interface UserProfileRow {
+  user_id: string;
+  username: string;
+  display_name: string;
+  bio: string;
+  website: string | null;
+  developer_title: string | null;
+  location: string | null;
+  profile_visibility: string;
+  avatar_url: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface OrganizationProfileRow {
+  organization_id: string;
+  description: string;
+  public_visibility: string;
+  website: string | null;
+  location: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface DeveloperFollowRow {
+  follower_user_id: string;
+  followed_user_id: string;
+  created_at: number;
+}
+
+export interface SocialPostRow {
+  id: string;
+  author_user_id: string;
+  content_text: string;
+  visibility: string;
+  attachment_extension_id: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface PostLikeRow {
+  user_id: string;
+  post_id: string;
+  created_at: number;
+}
+
+export interface PostCommentRow {
+  id: string;
+  post_id: string;
+  author_user_id: string;
+  content_text: string;
+  parent_comment_id: string | null;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SavedItemRow {
+  user_id: string;
+  item_type: string;
+  item_id: string;
+  created_at: number;
+}
+
+export interface CollectionRow {
+  id: string;
+  owner_user_id: string;
+  title: string;
+  description: string;
+  visibility: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CollectionItemRow {
+  collection_id: string;
+  item_type: string;
+  item_id: string;
+  created_at: number;
+}
+
+export interface ContentReportRow {
+  id: string;
+  reporter_user_id: string;
+  target_type: string;
+  target_id: string;
+  reason: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface UserBlockRow {
+  blocker_user_id: string;
+  blocked_user_id: string;
+  created_at: number;
+}
+
+export interface PublicActivityRow {
+  id: string;
+  event_type: string;
+  actor_user_id: string;
+  target_extension_id: string | null;
+  target_post_id: string | null;
+  metadata_json: string;
+  created_at: number;
+}
+
+
+// Phase 18 — Notifications
+export interface NotificationRow {
+  id: string;
+  recipient_user_id: string;
+  actor_user_id: string | null;
+  organization_id: string | null;
+  type: string;
+  entity_type: string;
+  entity_id: string;
+  title: string;
+  data_json: string;
+  read_at: number | null;
+  dedupe_key: string;
+  created_at: number;
+}
+
+export interface NotificationPreferenceRow {
+  user_id: string;
+  social_follow: number;
+  social_like: number;
+  social_comment: number;
+  social_reply: number;
+  social_mention: number;
+  extension_updated: number;
+  extension_released: number;
+  test_completed: number;
+  test_failed: number;
+  ci_failed: number;
+  ci_regression: number;
+  report_updated: number;
+  organization_invitation: number;
+  organization_role_changed: number;
+  organization_member_removed: number;
+  email_enabled: number;
+  created_at: number;
+  updated_at: number;
 }

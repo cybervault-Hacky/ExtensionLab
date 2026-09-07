@@ -875,3 +875,13 @@ Self-serve subscriptions with Razorpay: pick a plan on `/pricing`, click
 automatically — server-verified payment + webhook confirmation, no manual
 approval. Cards never touch ExtensionLab; cancel any time (paid access runs
 to the period end). Setup: [docs/RAZORPAY.md](docs/RAZORPAY.md).
+
+## Phase 16 — GitHub CI/CD
+
+ExtensionLab integrates directly into GitHub Actions via [docs/GITHUB_CI.md](docs/GITHUB_CI.md). See [.github/actions/extensionlab/action.yml](.github/actions/extensionlab/action.yml) for the composite action and [docs/GITHUB_CI.md](docs/GITHUB_CI.md) for full documentation.
+
+
+
+## Phase 20 — Production Launch Readiness
+
+Phase 20 completes the production hardening audit across authentication, authorization, multi-tenant isolation, upload security, browser sandbox, CI/CD security, analytics security, community security, notification security, dependency audit, secret scanning, and documentation. See docs/PRODUCTION_READINESS.md, docs/THREAT_MODEL.md, and docs/AUTHORIZATION_MATRIX.md. No new product systems were added; all existing Phase 1–19 features are preserved.
