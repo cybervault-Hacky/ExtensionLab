@@ -137,3 +137,11 @@ Reason: All code-level security, authorization, authentication, data integrity, 
 - Performance budgets must be measured against production-like load
 - All security controls rely on correct production configuration; no hidden backdoors or temporary bypasses exist
 Phase 26 (2026-09-07): FULL REGRESSION GREEN — 684/684 — RC CERTIFIED — per-file DB isolation via vitest.setupFiles + maxWorkers:1
+
+--- Phase 28 Update ---
+Infrastructure status: READY_FOR_INFRASTRUCTURE_E2E (external services unavailable; no fabrication).
+Regression preserved: 684/684.
+Real E2E: SKIPPED (Docker/PG/Redis/S3/browser unavailable).
+Safety checks: 0 critical / 0 high; secret scan clean; client bundle clean.
+Deployment foundation: docker-compose.yml + .env.staging (template) + env-validate.mjs + e2e-harness.mjs.
+Next milestone: activate external infrastructure, then execute real E2E through harness.
