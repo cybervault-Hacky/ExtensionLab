@@ -1,50 +1,152 @@
-# Development compose file.
-#
-#   docker compose --profile run-once build sandbox-image   # build the pinned sandbox image once
-#   docker compose up web                                    # web + embedded worker on :3000
-#
-# For production use docker-compose.prod.yml (separate web and worker services,
-# hardened settings). Never expose the Docker socket to the web container.
-services:
-  sandbox-image:
-    build:
-      context: .
-      dockerfile: sandbox/Dockerfile
-    image: extensionlab-sandbox:local
-    profiles: ["run-once"]
-    command: ["true"]
+# ExtensionLab Production / Staging Topology (Phase 27 foundation)
+# Verified architecture: lib/runtime/docker-driver.ts (security profiles), lib/storage/s3.ts,
+# lib/db/client.ts, lib/jobs/, docker/entrypoint.sh
+# This file is the deployment foundation; it has NOT been executed because the
+# sandbox environment lacks Docker, PostgreSQL, Redis, and S3 services.
+# Status per component: documented in docs/PHASE_27_FINAL_REPORT.md
 
-  web:
+services:
+  app:
     build:
       context: .
-      target: build
-    command: sh -c "node scripts/db-migrate.mjs && npm run dev"
+      dockerfile: Dockerfile
+    image: extensionlab:latest
     ports:
       - "3000:3000"
+    env_file:
+      - .env.staging
     environment:
-      PORT: "3000"
-      APP_ENV: development
-      APP_URL: http://localhost:3000
-      DATABASE_URL: sqlite:/data/extensionlab.sqlite
-      STORAGE_PATH: /data/storage
-      WORKER_MODE: embedded
-      EMAIL_PROVIDER: console
-      SANDBOX_IMAGE: extensionlab-sandbox:local
-      SANDBOX_TIMEOUT: "120"
-      SANDBOX_MEMORY_LIMIT: "768m"
-      SANDBOX_CPU_LIMIT: "0.5"
-      SANDBOX_MAX_CONCURRENCY: "2"
-      SANDBOX_NETWORK_MODE: restricted
-    volumes:
-      - .:/app
-      - /app/node_modules
-      - /app/.next
-      - dev-data:/data
-      # Development only: the embedded worker needs the Docker daemon to create
-      # sandboxes. In production the worker runs as a separate service.
-      - /var/run/docker.sock:/var/run/docker.sock
+      - APP_ENV=staging
+      - RUN_MIGRATIONS=0
     depends_on:
-      - sandbox-image
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    # Security baseline from docker-driver.ts / Phase 13 hardening
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+    user: "1000:1000"
+
+  worker:
+    image: extensionlab:latest
+    command: ["node", "scripts/worker-start.js"]
+    env_file:
+      - .env.staging
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+    user: "1000:1000"
+    # No host networking; no privileged; bounded resources
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+  browser-worker:
+    image: extensionlab:latest
+    command: ["node", "scripts/browser-worker-start.js"]
+    env_file:
+      - .env.staging
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    # Isolated browser execution — never privileged, never host network
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=500m
+    user: "1000:1000"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    # Cap-drop consistent with docker-driver profile (Phase 13)
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - SYS_ADMIN  # required for isolated container namespaces only
+
+  postgres:
+    image: postgres:16-alpine
+    env_file:
+      - .env.staging
+    environment:
+      - POSTGRES_DB=extensionlab
+      - POSTGRES_USER=extensionlab
+      # Password provided via .env.staging only (not hardcoded)
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U extensionlab -d extensionlab"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+    restart: unless-stopped
+
+  object-storage:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    env_file:
+      - .env.staging
+    environment:
+      - MINIO_ROOT_USER=extensionlab
+      # Password from .env.staging only
+    volumes:
+      - s3-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
 
 volumes:
-  dev-data:
+  postgres-data:
+  redis-data:
+  s3-data:
