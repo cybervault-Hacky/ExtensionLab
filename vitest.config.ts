@@ -19,6 +19,7 @@ export default defineConfig({
     exclude: ["**/node_modules/**", "tests/e2e/**"],
     setupFiles: ["tests/test-setup-isolation.ts"],
     maxWorkers: 1,
+    minWorkers: 1,
     server: {
       deps: {
         external: ["node:sqlite"],
