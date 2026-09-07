@@ -64,6 +64,15 @@ export function createTestRun(input: {
   /** Phase 15: bind the run to the exact saved test + version it executes. */
   savedTestId?: string | null;
   savedTestVersion?: number | null;
+  /** Phase 16: bounded CI metadata (never arbitrary payloads). */
+  provider?: string | null;
+  repository?: string | null;
+  commitSha?: string | null;
+  branch?: string | null;
+  tag?: string | null;
+  workflow?: string | null;
+  workflowRunId?: string | null;
+  pullRequestNumber?: number | null;
 }): TestRunRow {
   const db = getDb();
   const now = input.createdAt ?? Date.now();
@@ -71,8 +80,9 @@ export function createTestRun(input: {
   db.prepare(
     `INSERT INTO test_runs
       (id, user_id, extension_id, status, created_at, updated_at, package_id, job_id, stage, total,
-       browser_id, browser_version, engine, matrix_run_id, organization_id, saved_test_id, saved_test_version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       browser_id, browser_version, engine, matrix_run_id, organization_id, saved_test_id, saved_test_version,
+       provider, repository, commit_sha, branch, tag, workflow, workflow_run_id, pull_request_number)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.userId,
@@ -91,6 +101,14 @@ export function createTestRun(input: {
     input.organizationId ?? null,
     input.savedTestId ?? null,
     input.savedTestVersion ?? null,
+    input.provider ?? null,
+    input.repository ?? null,
+    input.commitSha ?? null,
+    input.branch ?? null,
+    input.tag ?? null,
+    input.workflow ?? null,
+    input.workflowRunId ?? null,
+    input.pullRequestNumber ?? null,
   );
   return getTestRunById(id)!;
 }

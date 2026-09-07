@@ -418,3 +418,16 @@ message so nobody deploys against an unsupported backend by accident.
    ledger).
 6. Rotation: update `RAZORPAY_*` secrets and the webhook secret together,
    then restart. Secret rotation never requires a database change.
+
+--- Phase 28 — Reproducible Infrastructure Harness ---
+Startup order (deterministic, not arbitrary sleep):
+1. PostgreSQL (migration gate must pass before app readiness)
+2. Redis (queue / coordination)
+3. Object Storage (S3/minio)
+4. App / Worker / Browser Worker (after dependencies healthy)
+5. Migration verification (second run = idempotent)
+6. E2E harness (only when all above ready; else BLOCKED / SKIPPED)
+Environment validation: scripts/env-validate.mjs (exit 2 = unavailable, 3 = invalid config).
+E2E harness: scripts/e2e-harness.mjs (machine-readable JSON, failure classification, cleanup, idempotency).
+Fixture: tests/phase27-safe-extension.zip (SHA-256 = 0189ec91...)
+Status: READY_FOR_INFRASTRUCTURE_E2E (external services unavailable; no fabrication).

@@ -261,6 +261,17 @@ export interface RunStudioTestOptions {
   /** CI-originated runs require ACTIVE tests; interactive may preview DRAFTs. */
   source: "interactive" | "ci";
   idempotencyKey?: string;
+  /** Phase 16: bounded CI metadata for run traceability. */
+  ciMetadata?: {
+    provider?: string;
+    repository?: string;
+    commitSha?: string;
+    branch?: string;
+    tag?: string;
+    workflow?: string;
+    workflowRunId?: string;
+    pullRequestNumber?: number;
+  };
 }
 
 export async function prepareStudioTestRun(viewer: StudioViewer, id: string, options: RunStudioTestOptions): Promise<{
@@ -350,6 +361,7 @@ export async function runStudioTest(viewer: StudioViewer, id: string, options: R
     organizationId: viewer.organizationId,
     browserId: options.browserId ?? "chromium",
     savedTest: prepared,
+    ciMetadata: options.ciMetadata,
   });
     audit(viewer.userId, viewer.organizationId, "test_run_started", { testId: id, runId: created.runId, version: prepared.version, browser: options.browserId ?? "chromium", source: options.source });
   return created;
@@ -510,7 +522,7 @@ export function describeStudioSuite(viewer: StudioViewer, id: string) {
 export async function runStudioSuite(
   viewer: StudioViewer,
   id: string,
-  options: { browserId?: BrowserId; testUrl?: string; source: "interactive" | "ci" },
+  options: { browserId?: BrowserId; testUrl?: string; source: "interactive" | "ci"; ciMetadata?: { provider?: string; repository?: string; commitSha?: string; branch?: string; tag?: string; workflow?: string; workflowRunId?: string; pullRequestNumber?: number } },
 ) {
   const suite = getAccessibleSavedTestSuite({ userId: viewer.userId, organizationId: viewer.organizationId }, id);
   if (!suite) throw new AppError("NOT_FOUND", { message: "Suite not found." });
@@ -569,6 +581,7 @@ export async function runStudioSuite(
     organizationId: viewer.organizationId,
     browserId,
     savedTest: prepared,
+    ciMetadata: options.ciMetadata,
   });
     audit(viewer.userId, viewer.organizationId, "test_run_started", { suiteId: id, runId: created.runId, tests: preparedMembers.length, browser: browserId, source: options.source });
   return { ...created, members: preparedMembers.length };

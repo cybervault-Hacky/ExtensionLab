@@ -158,6 +158,17 @@ export function createQueuedTestRun(input: {
   browserId?: string | null;
   /** Phase 15: execute this prepared saved test instead of the built-in suite. */
   savedTest?: PreparedSavedTest;
+  /** Phase 16: bounded CI metadata passed through from the CI endpoint. */
+  ciMetadata?: {
+    provider?: string;
+    repository?: string;
+    commitSha?: string;
+    branch?: string;
+    tag?: string;
+    workflow?: string;
+    workflowRunId?: string;
+    pullRequestNumber?: number;
+  };
 }): CreateRunResult {
   const config = getConfig();
   const tests: TestCase[] = input.savedTest ? savedTestsAsTestCases(input.savedTest) : discoverTests(input.analysis).tests;
@@ -181,6 +192,16 @@ export function createQueuedTestRun(input: {
       ...(input.savedTest ? { savedTestId: input.savedTest.testId, savedTestVersion: input.savedTest.version } : {}),
       ...(input.organizationId ? { organizationId: input.organizationId } : {}),
       ...(input.browserId ? { browserId: input.browserId } : {}),
+      ...(input.ciMetadata ? {
+        provider: input.ciMetadata.provider ?? null,
+        repository: input.ciMetadata.repository ?? null,
+        commitSha: input.ciMetadata.commitSha ?? null,
+        branch: input.ciMetadata.branch ?? null,
+        tag: input.ciMetadata.tag ?? null,
+        workflow: input.ciMetadata.workflow ?? null,
+        workflowRunId: input.ciMetadata.workflowRunId ?? null,
+        pullRequestNumber: input.ciMetadata.pullRequestNumber ?? null,
+      } : {}),
     });
     // Reservation first: throws QuotaExceededError and rolls everything back.
     const reservation = reserveQuota({ userId: input.userId, kind: "test_run", resourceId: run.id });

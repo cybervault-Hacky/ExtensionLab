@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Safe Fixture Extension",
+  "version": "1.0.0",
+  "description": "Minimal safe fixture for Phase 27 real E2E validation. No network scanning, no credential collection, no persistence.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["http://localhost/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html" },
+  "content_scripts": [{ "matches": ["http://localhost/*"], "run_at": "document_idle", "js": ["content.js"] }]
+}

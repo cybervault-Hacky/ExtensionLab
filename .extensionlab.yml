@@ -1,0 +1,5 @@
+project: my-project
+tests:
+  - saved-test-id-1
+browsers:
+  - chromium

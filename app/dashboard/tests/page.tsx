@@ -15,9 +15,8 @@ export default function TestsPage() {
       <h1 className="mt-1 text-3xl font-semibold tracking-tight">Tests</h1>
       <p className="mt-2 text-sm text-[var(--text-secondary)]">
         Persistent automated test history from your isolated browser sandbox. Build repeatable saved tests in the{" "}
-        <Link href="/dashboard/tests/studio" className="underline focus-visible:outline-2">
-          Test Automation Studio
-        </Link>
+        <Link href="/dashboard/tests/studio" className="underline focus-visible:outline-2">Test Automation Studio</Link>{" "}
+        <Link href="/dashboard/tests/ci" className="underline focus-visible:outline-2">CI</Link>
         .
       </p>
       <div className="mt-6">

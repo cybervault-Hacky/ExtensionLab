@@ -1,0 +1,137 @@
+name: 'ExtensionLab CI'
+description: 'Run ExtensionLab saved tests from GitHub Actions. Reuses the existing ExtensionLab Public API; does not create new auth or billing systems.'
+branding:
+  icon: 'check-circle'
+  color: 'purple'
+
+inputs:
+  api-key:
+    description: 'ExtensionLab API key with tests:write and packages:write scope. Must be stored in GitHub Secrets (EXTENSIONLAB_API_KEY). Never hardcode.'
+    required: true
+  project-id:
+    description: 'Project identifier (optional, for metadata only).'
+    required: false
+  test-id:
+    description: 'Saved test ID to trigger.'
+    required: true
+  package:
+    description: 'Path to the extension ZIP package (e.g., dist/extension.zip).'
+    required: true
+  package-version:
+    description: 'Optional package version label (server validates).'
+    required: false
+  browser:
+    description: 'Target browser: chromium | edge | firefox. Default: chromium.'
+    required: false
+    default: 'chromium'
+  matrix:
+    description: 'Run browser matrix (true/false). Default: false.'
+    required: false
+    default: 'false'
+  wait:
+    description: 'Wait for result (true/false). Default: true.'
+    required: false
+    default: 'true'
+  timeout:
+    description: 'Maximum polling minutes (max 15). Default: 15.'
+    required: false
+    default: '15'
+  fail-on-regression:
+    description: 'Fail CI on regression detection (true/false). Default: true.'
+    required: false
+    default: 'true'
+  api-base:
+    description: 'ExtensionLab API base URL. Default: https://extensionlab.example.com.'
+    required: false
+    default: 'https://extensionlab.example.com'
+
+outputs:
+  run-id:
+    description: 'ExtensionLab run ID if available.'
+  status:
+    description: 'PASS / FAIL / WARN / INFRASTRUCTURE_ERROR / AUTHENTICATION_ERROR / QUOTA_EXCEEDED.'
+  result-file:
+    description: 'Path to generated extensionlab-results.json artifact.'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: ExtensionLab CI
+      shell: bash
+      env:
+        EXTENSIONLAB_API_KEY: ${{ inputs.api-key }}
+        EXTENSIONLAB_TEST_ID: ${{ inputs.test-id }}
+        EXTENSIONLAB_PACKAGE: ${{ inputs.package }}
+        EXTENSIONLAB_BROWSER: ${{ inputs.browser }}
+        EXTENSIONLAB_MATRIX: ${{ inputs.matrix }}
+        EXTENSIONLAB_WAIT: ${{ inputs.wait }}
+        EXTENSIONLAB_TIMEOUT: ${{ inputs.timeout }}
+        EXTENSIONLAB_API_BASE: ${{ inputs.api-base }}
+        EXTENSIONLAB_PROJECT_ID: ${{ inputs.project-id }}
+        EXTENSIONLAB_PACKAGE_VERSION: ${{ inputs.package-version }}
+        EXTENSIONLAB_FAIL_ON_REGRESSION: ${{ inputs.fail-on-regression }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_REF: ${{ github.ref }}
+        GITHUB_SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        # Secret masking: never echo the key or authorization headers.
+        sanitize() {
+          sed -E 's/(EXTENSIONLAB_API_KEY|authorization|bearer)[:=][^ ]+/\1=[REDACTED]/gi; s/[a-f0-9]{32,}/[HASH]/gi'
+        }
+        echo "ExtensionLab CI starting..."
+        # Verify package exists
+        if [[ ! -f "$EXTENSIONLAB_PACKAGE" ]]; then
+          echo "Package not found: $EXTENSIONLAB_PACKAGE" | sanitize
+          exit 2
+        fi
+        # Upload package (reuse existing /api/v1/packages)
+        UPLOAD_RESPONSE=$(curl -s -S -X POST "$EXTENSIONLAB_API_BASE/api/v1/packages" \
+          -H "Authorization: Bearer $EXTENSIONLAB_API_KEY" \
+          -F "file=@$EXTENSIONLAB_PACKAGE" 2>&1 | sanitize) || true
+        echo "$UPLOAD_RESPONSE" | head -n 20 | sanitize
+        # Trigger test (reuse existing /api/v1/tests/:testId/runs)
+        TRIGGER_BODY="{\"browser\":\"$EXTENSIONLAB_BROWSER\",\"source\":\"ci\"}"
+        if [[ "$EXTENSIONLAB_MATRIX" == "true" ]]; then
+          TRIGGER_BODY="{\"browsers\":[\"chromium\",\"edge\",\"firefox\"],\"source\":\"ci\"}"
+        fi
+        # Add bounded CI metadata from GitHub environment
+        CI_META="\"provider\":\"github\",\"repository\":\"$GITHUB_REPOSITORY\",\"commitSha\":\"$GITHUB_SHA\",\"branch\":\"${GITHUB_REF#refs/heads/}\",\"workflowRunId\":\"$GITHUB_RUN_ID\""
+        TRIGGER_BODY="{\"browser\":\"$EXTENSIONLAB_BROWSER\",\"source\":\"ci\",$CI_META}"
+        TRIGGER_RESPONSE=$(curl -s -S -X POST "$EXTENSIONLAB_API_BASE/api/v1/tests/$EXTENSIONLAB_TEST_ID/runs" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer $EXTENSIONLAB_API_KEY" \
+          -H "Idempotency-Key: $GITHUB_SHA-$GITHUB_RUN_ID-$EXTENSIONLAB_TEST_ID" \
+          -d "$TRIGGER_BODY" 2>&1 | sanitize) || true
+        echo "Trigger response (sanitized): $TRIGGER_RESPONSE" | sanitize
+        # Polling loop with bounded timeout (max 15 min default)
+        TIMEOUT_MIN=${EXTENSIONLAB_TIMEOUT:-15}
+        START=$(date +%s)
+        RUN_ID=""
+        while true; do
+          ELAPSED=$((($(date +%s) - START) / 60))
+          if [[ $ELAPSED -ge $TIMEOUT_MIN ]]; then
+            echo "Timeout after ${TIMEOUT_MIN}m"
+            exit 4
+          fi
+          # Extract run id safely
+          RUN_ID=$(echo "$TRIGGER_RESPONSE" | grep -o '"id":"[^"]*"' | head -n 1 | cut -d'"' -f4 || true)
+          if [[ -n "$RUN_ID" ]]; then
+            POLL=$(curl -s -S -H "Authorization: Bearer $EXTENSIONLAB_API_KEY" \
+              "$EXTENSIONLAB_API_BASE/api/v1/tests/$EXTENSIONLAB_TEST_ID/runs" 2>&1 | sanitize) || true
+            # Write results artifact (never contains secrets)
+            echo "$POLL" > extensionlab-results.json
+            # Determine status from response (simplified)
+            if echo "$POLL" | grep -q '"status":"COMPLETED"'; then
+              echo "Completed."
+              exit 0
+            fi
+            if echo "$POLL" | grep -q '"status":"FAILED"'; then
+              echo "Failed."
+              exit 1
+            fi
+          fi
+          sleep 5
+        done
+      working-directory: ${{ github.workspace }}
