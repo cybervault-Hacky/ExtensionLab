@@ -1,147 +1,71 @@
-# Production Readiness Audit — Phase 20
+# Production Readiness Audit
 
-Branch: arena/01a0779a-extensionlab
-Commit: 761fa12 (Phase 19) + 0c5a271 (Phase 18) + 49f8703 (Phase 16/17)
+## v1.0 publishing update — 2026-11-04
 
-Status conventions:
-PASS — verified by code inspection or test
-PASS_WITH_LIMITATION — verified but depends on external configuration
-REQUIRES_CONFIGURATION — needs operator setup (not a code failure)
-BLOCKED — unresolved launch-blocking issue
-SKIPPED — infrastructure unavailable for verification
+This update supersedes historical phase-status summaries where they conflict with the code currently at `cff7cca` plus the release-preparation branch changes. The 34-phase core roadmap remains complete; this is a deployment-readiness assessment, not a Phase 35.
 
----
+### Current conclusion
 
-## Security
+**Controlled public preview:** ready for owner hosting action.
 
-| Area | Status | Evidence / Risk | Remediation / Verification |
-|---|---|---|---|
-| Authentication | PASS | Existing password hash + session (HttpOnly, Secure, SameSite) | Verified in code; session rotation present |
-| Authorization (API) | PASS | withApiKey + scope checks + org isolation | Verified in routes |
-| Authorization (UI) | PASS | Existing middleware + page guards | Verified |
-| Multi-tenant isolation | PASS | Organization checks in repos/routes | Verified in org service |
-| IDOR | PASS_WITH_LIMITATION | Routes check user/org/resource; full matrix not exhaustively tested | Security regression tests cover major paths |
-| Cross-org leakage | PASS_WITH_LIMITATION | Same; relies on existing org authorization | Additional targeted tests recommended |
-| Public/private data | PASS | Visibility enforced server-side (public_profile, post visibility, analytics) | Verified in endpoints |
-| Session security | PASS | Logout, session invalidation, rotation in auth layer | Code verified |
-| CSRF | PASS | Existing middleware | Verified |
-| CSP / Security headers | REQUIRES_CONFIGURATION | Depends on nginx/edge config; code uses safe practices | Configure CSP in production proxy |
-| Cookie security | PASS | HttpOnly / Secure / SameSite settings present | Verified |
-| XSS | PASS | User content escaped/not rendered as HTML; no dangerousSetInnerHTML on user input | Verified in components |
-| Upload security | PASS | ZIP size limits, MIME checks, SHA-256 bind, package verification | Existing package service |
-| Package integrity | PASS | Exact SHA-256 binding; no silent substitution | Studio-service verified |
-| Browser sandbox | PASS_WITH_LIMITATION | Docker non-root, cap-drop, read-only, limits present in sandbox/Dockerfile | Sandbox config audited; container isolation depends on runtime deployment |
-| Browser command allowlist | PASS | Existing allowlisted actions only; no eval/shell | Analyzer + browser-compat audited |
-| SSRF protection | PASS | URL validation + private-range blocks in browser/webhook code | Existing protections preserved |
-| AIPrompt injection | PASS | Phase 8 AI isolated; no code execution from prompts | Existing AI service audited |
-| Secret scanning | PASS | Scan clean on new source; no keys in source/tests/docs | Verified by grep |
-| Client bundle | PASS | No API keys / secrets in .next/static | Verified by grep |
+**Full production service:** blocked by real infrastructure and implementation gates.
 
----
+**Production certification:** not claimed.
 
-## Reliability / Infrastructure
+The recommended first public surface is a Vercel-hosted controlled preview of browser-local inspection only. `EXTENSIONLAB_PREVIEW_MODE=controlled` visibly labels the preview and middleware blocks every stateful/API route before it can create local state or claim a cloud-backed capability. Vercel is not an execution environment for the product's Docker browser worker or persistent filesystem.
 
-| Area | Status | Evidence / Risk |
-|---|---|---|
-| Database (SQLite/PG) | PASS_WITH_LIMITATION | Migrations idempotent; parameterized queries used; no raw SQL | Verified; PostgreSQL port needs production testing |
-| Database performance | REQUIRES_CONFIGURATION | Indexes exist; large-org query paths not fully load-tested | Run load tests against production-like data |
-| Migration safety | PASS | 15 migrations applied; idempotent script used | Verified |
-| Queue / Workers | PASS_WITH_LIMITATION | Existing queue/worker architecture; idempotency present | Verify worker draining / crash recovery in production |
-| Job idempotency | PASS | Idempotency keys on critical paths (test runs, package upload, notifications) | Verified |
-| Redis / Cache | REQUIRES_CONFIGURATION | Not verified in sandbox; assume configured for production | Configure and verify |
-| Object Storage (S3) | REQUIRES_CONFIGURATION | Existing storage references; bucket policy must be private | Configure and verify |
-| Email / Notification delivery | PASS_WITH_LIMITATION | Email abstraction exists; actual provider depends on env | Configure SMTP/provider |
-| Webhooks | PASS_WITH_LIMITATION | Existing signing + replay protection; requires secret config | Verify webhook secret rotation |
-| Monitoring / Health | REQUIRES_CONFIGURATION | /health and /ready exist; must be wired to load balancer | Configure |
-| Backups | REQUIRES_CONFIGURATION | Documentation created (docs/BACKUP_RESTORE.md needed) | Operator must configure |
-| Disaster recovery | REQUIRES_CONFIGURATION | RPO/RTO must be defined by operator | Documented assumption |
-| Load testing | SKIPPED | Requires isolated production-like environment | Must complete before full public launch |
-| Failure injection | SKIPPED | Requires isolated infrastructure | Must complete before full public launch |
+### Verified quality gates
 
----
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Node/runtime | PASS | Node `v22.22.3`, npm `10.9.8`; project now declares Node `>=22.11.0 <23`. |
+| Locked install | PASS | `npm ci --no-audit --no-fund` with committed `package-lock.json`. |
+| Typecheck | PASS | `npm run typecheck`. |
+| Lint | PASS with one existing warning | `npm run lint`; `CheckoutReturn.tsx` has an exhaustive-deps warning. |
+| Regression | PASS | `npm test`: 684/684 passed, 83 test files. |
+| Production build | PASS with documented warnings | `npm run build`; optional dynamic import warnings for `redis` and `@aws-sdk/client-s3`, plus the lint warning. |
+| Hydration | PASS locally; public browser-console verification pending owner deployment | Removed pre-hydration document mutation and `suppressHydrationWarning`; the production-rendered local page had matching CSP/HTML script nonces and no root nonce prop. |
+| CSP | PASS by source | Per-request nonce policy in middleware; API CSP is restrictive; no `unsafe-eval` in production policy. |
+| Secret hygiene | PASS | No tracked `.env`, database, key, or certificate file; ignored patterns confirmed. |
+| Production dependency audit | PASS after targeted remediation | Initial `npm audit --omit=dev` found 1 critical / 3 high findings in locked Next.js 15.5.25, its Sharp dependency, nested PostCSS, and source-map-js. Updated Next.js and `eslint-config-next` to 15.5.29, refreshed Sharp to 0.35.5, and used narrowly scoped npm overrides for Next's nested PostCSS 8.5.32 and source-map-js 1.2.2. Final `npm audit --omit=dev --json`: 0 vulnerabilities. No `npm audit fix --force` was used. |
+| Staging runbook temporary-file defect | FIXED | `scripts/staging-up.sh` keeps validator and E2E output in shell variables and preserves configuration exit code `3`. |
 
-## External Integrations
+### Actual architecture findings
 
-| Provider | Status | Evidence |
-|---|---|---|
-| Razorpay (Phase 14) | REQUIRES_CONFIGURATION | Webhook verification present; live secrets not in repo; needs production key configuration | Verify webhook signatures; test payment flows |
-| GitHub (Phase 16) | PASS_WITH_LIMITATION | API-key flow only; no OAuth/App; action uses existing public API | Verify secret rotation procedure |
-| AI (Phase 8) | PASS_WITH_LIMITATION | AI isolated; prompt injection defenses present; never authoritative over analytics | No AI in security boundary |
+| Component | Actual status | Evidence / limitation |
+| --- | --- | --- |
+| Next.js web application | build-ready | Next.js 15 standalone output, Node runtime API routes, CSP middleware, Vercel preview config. |
+| Database | **SQLite only; external PostgreSQL unavailable and unsupported by current driver** | `lib/db/client.ts` and `scripts/db-migrate.mjs` use `node:sqlite`; migration runner explicitly rejects PostgreSQL URLs. |
+| Redis | unavailable | Coordination adapter is optional and dynamically imports `redis`, which is not a package dependency. No Redis service or live operation was tested. |
+| Object storage | unavailable | S3 adapter is optional and dynamically imports `@aws-sdk/client-s3`, which is not a package dependency. No bucket or live integrity test was available. |
+| Background worker | unavailable | Code and worker image exist, but no deployed worker registration, heartbeat, execution, retry, or graceful drain evidence exists. |
+| Browser worker | unavailable | Docker CLI/daemon absent. No isolated extension execution, session lifecycle, artifact capture, or cleanup was run. |
+| Authentication/session | code-level controls present; preview disabled | Secure HttpOnly/SameSite cookie configuration, CSRF same-origin checks, and ownership checks are preserved. Stateful auth routes are unavailable in controlled preview. |
+| Razorpay | disabled | Provider implementation and signature handling exist, but no authorized live credentials/webhook E2E; preview uses `BILLING_PROVIDER=disabled`. |
+| AI | disabled | Provider isolation and redaction code exist; preview uses `AI_PROVIDER=disabled`; no key is configured. |
 
----
+### Deployment configuration finding
 
-## Deployment / Operations
+`docker-compose.prod.yml` documents the actual legacy single-host SQLite/local-storage topology with a worker that receives the Docker socket. It requires a persistent shared volume and a dedicated Docker trust boundary; it is not compatible with Vercel.
 
-| Area | Status |
-|---|---|
-| .env.example documented | PASS |
-| Deployment docs updated | PASS (docs/DEPLOYMENT.md / docs/OPERATIONS.md) |
-| Rollback plan documented | PASS (docs/LAUNCH_CHECKLIST.md / docs/DEPLOYMENT.md) |
-| Incident response doc | PASS (docs/INCIDENT_RESPONSE.md) |
-| Credential rotation doc | PASS (docs/SECURITY.md) |
-| Launch checklist | PASS (docs/LAUNCH_CHECKLIST.md) |
-| No production seed data | PASS (verified no demo users/posts/extensions) |
+The separate `docker-compose.yml` / Phase 30 staging path is **not a verified v1.0 deployment topology**. It references service commands that are absent from the repository and health endpoints inconsistent with the actual `/api/health` route. It must not be used as evidence of PostgreSQL, Redis, object-storage, or browser-worker readiness. `scripts/staging-up.sh` remains an honest detector; its `/tmp` defect and exit-code handling have been corrected, but it cannot manufacture missing services or make the stale topology production-ready.
 
----
+### Security observations
 
-## Testing / Verification
+Preserved code-level controls include CSP nonce generation, restrictive API CSP, secure session-cookie flags in production, CSRF same-origin enforcement, server-side ownership checks, ZIP validation and size caps, package SHA-256 verification, validated storage keys, SSRF/private-network restrictions, sandbox resource restrictions, secret redaction, and payment webhook signature validation.
 
-| Command | Status | Evidence |
-|---|---|---|
-| npm run typecheck | PASS | Latest run clean |
-| npm run lint | PASS | Existing warning only |
-| npm run build | PASS | Previous green build preserved |
-| npm run db:migrate | PASS | 15 migrations applied idempotently |
-| npm test | PASS | Phase 16 / 17 / 18 / 19 suites pass |
-| Secret scan (new files) | PASS | No secrets found |
-| Client bundle scan | PASS | No keys in .next/static |
-| Security regression tests | PASS_WITH_LIMITATION | Core tests present; full adversarial E2E requires infrastructure |
-| Full regression suite | PASS | All existing phases preserved |
-| Docker E2E | SKIPPED | Docker unavailable in verification environment |
-| PostgreSQL E2E | SKIPPED | PostgreSQL unavailable |
-| Redis E2E | SKIPPED | Redis unavailable |
-| S3 E2E | SKIPPED | Object storage unavailable |
-| Razorpay E2E | SKIPPED | Test credentials unavailable |
+Runtime evidence remains unavailable for HTTPS headers at a public URL, session behavior behind a real proxy, cloud storage access controls, distributed rate limits, worker isolation, backup/restore, and external webhook delivery. These are release gates for a future full service, not PASS claims.
 
----
+### Preview scope
 
-## Security Findings
+**Enabled:** landing pages, navigation, responsive UI, documentation page, pricing information with disabled account/payment CTAs, and local browser-side package inspection.
 
-| Severity | Count | Notes |
-|---|---|---|
-| CRITICAL | 0 | No authentication bypass, authorization bypass, or arbitrary execution found |
-| HIGH | 0 | No cross-tenant data leaks or private-data leaks verified |
-| MEDIUM | 0 | No medium findings from audit |
-| LOW | 0 | No low findings from audit |
-| INFORMATIONAL | 2 | CSP/headers require production proxy configuration; load testing requires external infrastructure |
+**Disabled:** account creation/login/password reset, dashboards, reports, extensions, all stateful APIs, uploads to persistent storage, public API keys, webhooks, workers, automated and interactive browser tests, artifacts, AI, e-mail, Redis, S3, database access, and Razorpay.
 
-No unresolved launch-blocking findings.
+### Outstanding owner actions
 
----
+See `PUBLIC_PREVIEW_DEPLOYMENT.md` and `LAUNCH_CHECKLIST.md`. The owner must import the repository into Vercel, set encrypted controlled-preview variables, deploy `main`, and perform the public URL verification. No Vercel, Railway, Render, Fly, database, storage, Redis, Docker, payment, domain, or DNS credential was available in this session.
 
-## Production Readiness Verdict
+### Historical phase records
 
-READY_WITH_CONFIGURATION
-
-Reason: All code-level security, authorization, authentication, data integrity, and architecture checks pass. The remaining items are operational/configuration requirements (CSP/proxy headers, Redis/S3/DB/backup configuration, load testing, failure injection, external E2E) that must be completed by the infrastructure/operator before public launch. Nothing in the code requires repair.
-
----
-
-## Remaining Limitations (Explicit)
-
-- Load testing not executed (requires isolated load environment)
-- Failure injection not executed (requires isolated infrastructure)
-- Docker / PostgreSQL / Redis / S3 / Razorpay E2E skipped (infrastructure unavailable; no fake passes)
-- CSP / security headers depend on deployment proxy (not hardcoded incorrectly)
-- Backup/restore must be configured by operator
-- Performance budgets must be measured against production-like load
-- All security controls rely on correct production configuration; no hidden backdoors or temporary bypasses exist
-Phase 26 (2026-09-07): FULL REGRESSION GREEN — 684/684 — RC CERTIFIED — per-file DB isolation via vitest.setupFiles + maxWorkers:1
-
---- Phase 28 Update ---
-Infrastructure status: READY_FOR_INFRASTRUCTURE_E2E (external services unavailable; no fabrication).
-Regression preserved: 684/684.
-Real E2E: SKIPPED (Docker/PG/Redis/S3/browser unavailable).
-Safety checks: 0 critical / 0 high; secret scan clean; client bundle clean.
-Deployment foundation: docker-compose.yml + .env.staging (template) + env-validate.mjs + e2e-harness.mjs.
-Next milestone: activate external infrastructure, then execute real E2E through harness.
+Phase 21–34 reports are retained for provenance. They document source-level and constrained-environment checks performed at their dates; they do not establish present-day availability of external infrastructure. No Phase 35 has been created.

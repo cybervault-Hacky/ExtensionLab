@@ -21,9 +21,16 @@ PG_READY=""; REDIS_READY=""; STORAGE_READY=""; APP_READY=""; FINAL="SKIPPED"; BR
 fail() {
   FAILURE_KIND="$1"
   STATUS="BLOCKED"
+  case "$FAILURE_KIND" in
+    CONFIG) EXIT_CODE=3 ;;
+    INFRASTRUCTURE) EXIT_CODE=2 ;;
+    *) EXIT_CODE=1 ;;
+  esac
   log "FAIL: $FAILURE_KIND — $2"
-  echo "{\"phase\":30,\"status\":\"$STATUS\",\"failureKind\":\"$FAILURE_KIND\",\"reason\":\"$2\"}" > /dev/stdout
-  exit 2
+  # Write directly to the inherited stdout. Reopening /dev/stdout is not
+  # portable in restricted shells and previously masked the intended exit code.
+  echo "{\"phase\":30,\"status\":\"$STATUS\",\"failureKind\":\"$FAILURE_KIND\",\"reason\":\"$2\"}"
+  exit "$EXIT_CODE"
 }
 
 # 1. Environment validation (fail closed)
@@ -38,23 +45,24 @@ else
   log "PASS: .env.staging template not required if env loaded from vault/CI"
 fi
 
-# Try env validator (honest result regardless of missing .env)
+# Try env validator. Keep its JSON in memory: /tmp is not guaranteed to exist
+# on constrained shells (the old redirection failed before Node could run).
 if command -v node >/dev/null 2>&1; then
-  node scripts/env-validate.mjs > /tmp/env-val-phase30.json 2>/dev/null || true
-  if [ -f /tmp/env-val-phase30.json ]; then
-    OVERALL=$(grep '"overall"' /tmp/env-val-phase30.json | head -n 1 | sed 's/.*: "\([^"]*\)".*/\1/')
-    log "Env validator result: $OVERALL"
-    if [ "$OVERALL" = "CONFIGURATION_INVALID" ]; then
-    STATUS="BLOCKED"
-    FAILURE_KIND="CONFIG"
-    EXIT_CODE=3
-    log "BLOCKED: Environment configuration invalid — fix .env.staging before deployment"
+  ENV_VALIDATION_OUTPUT="$(node scripts/env-validate.mjs 2>/dev/null || true)"
+  if [ -z "$ENV_VALIDATION_OUTPUT" ]; then
+    fail "CONFIG" "environment validator produced no output"
+  fi
+  OVERALL=$(printf '%s\n' "$ENV_VALIDATION_OUTPUT" | sed -n 's/.*"overall"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+  log "Env validator result: ${OVERALL:-UNKNOWN}"
+  if [ "$OVERALL" = "CONFIGURATION_INVALID" ]; then
+    fail "CONFIG" "environment configuration invalid — fix the deployment environment before startup"
   elif [ "$OVERALL" = "READY_FOR_INFRASTRUCTURE_E2E" ]; then
     STATUS="READY_FOR_INFRASTRUCTURE_E2E"
     FAILURE_KIND="INFRASTRUCTURE"
     EXIT_CODE=2
     log "READY: Environment configured; external infrastructure unavailable (honest)"
-  fi
+  else
+    fail "CONFIG" "environment validator returned an unrecognized status"
   fi
 fi
 
@@ -87,7 +95,7 @@ fi
 
 # 4. Check docker compose config if docker is available
 if [ "$DOCKER_AVAIL" -eq 1 ]; then
-  if docker compose config > /tmp/compose-config-phase30.yml 2>/dev/null; then
+  if docker compose config >/dev/null 2>&1; then
     log "PASS: docker compose config valid"
   else
     fail "CONFIG" "docker compose config failed — syntax or service error"
@@ -211,16 +219,16 @@ fi
 if [ "$DOCKER_AVAIL" -eq 1 ] && [ -n "$PG_READY" ] && [ -n "$REDIS_READY" ] && [ -n "$STORAGE_READY" ] && [ -n "$APP_READY" ]; then
   log "All services ready — attempting E2E harness"
   if command -v node >/dev/null 2>&1; then
-    node scripts/e2e-harness.mjs --fixture tests/phase27-safe-extension.zip > /tmp/e2e-phase30.json 2>/dev/null || true
-    if [ -f /tmp/e2e-phase30.json ]; then
-      FINAL=$(grep '"finalStatus"' /tmp/e2e-phase30.json | head -n 1 | sed 's/.*: "\([^"]*\)".*/\1/')
-      log "E2E finalStatus: $FINAL"
+    E2E_OUTPUT="$(node scripts/e2e-harness.mjs --fixture tests/phase27-safe-extension.zip 2>/dev/null || true)"
+    if [ -n "$E2E_OUTPUT" ]; then
+      FINAL=$(printf '%s\n' "$E2E_OUTPUT" | sed -n 's/.*"finalStatus"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+      log "E2E finalStatus: ${FINAL:-UNKNOWN}"
       if [ "$FINAL" = "PASS" ]; then
         log "PASS: Real E2E certified"
         STATUS="INFRASTRUCTURE_E2E_VALIDATED"
         EXIT_CODE=0
       else
-        log "FAIL: E2E did not pass — $FINAL"
+        log "FAIL: E2E did not pass — ${FINAL:-missing final status}"
         STATUS="READY_FOR_INFRASTRUCTURE_E2E"
         FAILURE_KIND="E2E"
         EXIT_CODE=1

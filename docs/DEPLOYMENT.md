@@ -1,5 +1,25 @@
 # Deployment
 
+> ## v1.0 publishing clarification — 2026-11-04
+>
+> This document contains the repository's legacy single-host Docker guidance as well as the current release audit. The implementation at this release is **SQLite-only**: `lib/db/client.ts` and `scripts/db-migrate.mjs` use `node:sqlite`, and a `postgres://` URL is rejected. Redis and S3 adapters dynamically load packages that are not installed. Therefore no PostgreSQL, Redis, or S3 deployment is certified by this repository today.
+>
+> **Controlled public preview:** use the Vercel plan in [PUBLIC_PREVIEW_DEPLOYMENT.md](PUBLIC_PREVIEW_DEPLOYMENT.md). It deliberately enables browser-local inspection only and disables accounts, APIs, workers, cloud storage, AI, and payments. Vercel is suitable for the Next.js preview surface but cannot host the persistent filesystem or Docker browser-worker trust boundary needed by a full service.
+>
+> **Do not use `docker-compose.yml` as a v1.0 launch command.** The Phase 30 compose file references missing worker/browser-worker command files and `/health` while the application liveness route is `/api/health`; it has not been executed and is not proof of PostgreSQL/Redis/MinIO/browser-worker readiness. `docker-compose.prod.yml` is the closer current single-host topology, but it remains a Docker + persistent-volume + SQLite/local-storage deployment and does not satisfy the external-infrastructure gate. The staging script now handles environments without `/tmp` safely, but it cannot substitute for actual services.
+>
+> ### Build and runtime configuration
+>
+> - **Node:** `>=22.11.0 <23`; the deployment image and local audit use Node 22.
+> - **Install:** `npm ci --no-audit --no-fund` using `package-lock.json`.
+> - **Build:** `npm run build` (Next.js standalone output).
+> - **Container web start:** `node server.js` within the standalone image; the Dockerfile default supplies this command.
+> - **Migrations:** `npm run db:migrate` against a backed-up persistent SQLite volume only. Do not point it at PostgreSQL.
+> - **Liveness:** `GET /api/health` is process-only. `GET /api/ready` checks configured dependencies and must not be treated as ready merely because liveness succeeds.
+> - **Rollback:** restore the prior Vercel deployment for the controlled preview, or stop/revert the prior version on the single-host topology after validating database compatibility. See [LAUNCH_CHECKLIST.md](LAUNCH_CHECKLIST.md).
+>
+> See [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md) for the complete server-only variable inventory and [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) for verified versus unavailable services.
+
 This guide covers running ExtensionLab in production: the web server, the
 background worker, the database, package/artifact storage and the Docker
 sandbox infrastructure.
