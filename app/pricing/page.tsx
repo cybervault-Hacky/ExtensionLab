@@ -8,6 +8,7 @@ import { getEffectivePlan } from "@/lib/billing/entitlements";
 import { formatPlanAmount, orderedPlans, planComparisonRows } from "@/lib/billing/plans";
 import { isBillingEnabled } from "@/lib/billing/provider";
 import { restoreUser, SESSION_COOKIE } from "@/lib/auth/session";
+import { isControlledPublicPreview } from "@/lib/preview";
 
 export const metadata: Metadata = {
   title: "Pricing",
@@ -26,11 +27,14 @@ const faqs = [
 ];
 
 export default async function PricingPage() {
+  const controlledPreview = isControlledPublicPreview();
   const catalog = getPlanCatalog();
   const plans = orderedPlans(catalog).map((plan) => toPlanView(plan, formatPlanAmount(plan)));
   const comparison = planComparisonRows(catalog);
-  const cookieStore = await cookies();
-  const user = restoreUser(cookieStore.get(SESSION_COOKIE)?.value ?? "");
+  // A preview must not open its local database merely because a visitor sent a
+  // stale session cookie. Billing and workspace actions remain disabled.
+  const cookieStore = controlledPreview ? null : await cookies();
+  const user = cookieStore ? restoreUser(cookieStore.get(SESSION_COOKIE)?.value ?? "") : null;
   const currentPlanId = user ? getEffectivePlan(user.id).plan.id : null;
 
   return (
@@ -47,7 +51,14 @@ export default async function PricingPage() {
               </p>
             </div>
             <div className="pt-12">
-              <PricingTable plans={plans} comparison={comparison} billingEnabled={isBillingEnabled()} signedIn={Boolean(user)} currentPlanId={currentPlanId} />
+              <PricingTable
+                plans={plans}
+                comparison={comparison}
+                billingEnabled={!controlledPreview && isBillingEnabled()}
+                controlledPreview={controlledPreview}
+                signedIn={Boolean(user)}
+                currentPlanId={currentPlanId}
+              />
             </div>
           </div>
         </section>

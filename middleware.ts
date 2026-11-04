@@ -1,22 +1,71 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { isControlledPublicPreview } from "@/lib/preview";
 import { buildContentSecurityPolicy, generateNonce } from "@/lib/security/csp";
+
+const PREVIEW_RESTRICTED_PREFIXES = [
+  "/dashboard",
+  "/login",
+  "/signup",
+  "/forgot-password",
+  "/reset-password",
+  "/report",
+  "/extensions",
+] as const;
+
+function isPreviewRestrictedPage(pathname: string): boolean {
+  return PREVIEW_RESTRICTED_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
+}
 
 /**
  * Edge middleware:
  *
- * 1. Issues a per-request CSP nonce for every HTML page. Next.js reads the
+ * 1. In controlled-preview mode, rejects every infrastructure-dependent API
+ *    call before a route can touch local disk or an unconfigured dependency,
+ *    and redirects account/workspace routes to an honest unavailable page.
+ * 2. Issues a per-request CSP nonce for every HTML page. Next.js reads the
  *    nonce from the request's Content-Security-Policy header and applies it to
- *    its own inline scripts; `app/layout.tsx` reads it from `x-nonce`.
- * 2. Propagates/creates an `X-Request-ID` so logs and error references can be
+ *    its own inline scripts.
+ * 3. Propagates/creates an X-Request-ID so logs and error references can be
  *    correlated across web, worker and reverse proxy.
- * 3. UX-only redirect: users without a session cookie are sent to sign in with
+ * 4. UX-only redirect: users without a session cookie are sent to sign in with
  *    the original destination preserved. Real authentication and ownership are
  *    always enforced server-side in the dashboard layout and API routes; a
  *    present cookie is never treated as proof of a valid session.
  */
 export function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
+  const controlledPreview = isControlledPublicPreview();
+
+  // APIs were deliberately excluded from the regular CSP/nonce path. In a
+  // controlled preview this must happen before route execution, otherwise a
+  // request could initialize the development SQLite/local-storage fallback.
+  if (pathname.startsWith("/api/")) {
+    if (controlledPreview && pathname !== "/api/health") {
+      return NextResponse.json(
+        {
+          error: {
+            errorCode: "PREVIEW_FEATURE_UNAVAILABLE",
+            message: "This controlled public preview does not provide persistent accounts, cloud APIs, uploads, AI assistance, payments, or browser testing.",
+          },
+        },
+        {
+          status: 503,
+          headers: {
+            "cache-control": "no-store",
+            "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+          },
+        },
+      );
+    }
+    return NextResponse.next();
+  }
+
+  if (controlledPreview && isPreviewRestrictedPage(pathname)) {
+    return NextResponse.redirect(new URL("/preview-unavailable", request.url));
+  }
 
   if (pathname.startsWith("/dashboard") && !request.cookies.has("extensionlab_session")) {
     const login = new URL("/login", request.url);
@@ -50,9 +99,10 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
+    "/api/:path*",
     {
-      // All pages; API routes get a static CSP from next.config.ts and static
-      // assets need none. Prefetch requests carry no HTML, so skip them.
+      // HTML pages receive CSP and an X-Request-ID. Static assets need none.
+      // Prefetch requests carry no HTML, so skip them.
       source: "/((?!api|_next/static|_next/image|icons|favicon.ico|robots.txt|sitemap.xml).*)",
       missing: [
         { type: "header", key: "next-router-prefetch" },

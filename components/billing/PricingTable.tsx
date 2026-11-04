@@ -17,12 +17,14 @@ interface PricingTableProps {
   plans: PlanView[];
   comparison: PlanComparisonRow[];
   billingEnabled: boolean;
+  /** Explicitly disables every account/payment CTA on a no-infrastructure preview. */
+  controlledPreview?: boolean;
   /** Whether the visitor is signed in (server-determined); decides the CTA target. */
   signedIn: boolean;
   currentPlanId: PlanView["id"] | null;
 }
 
-export function PricingTable({ plans, comparison, billingEnabled, signedIn, currentPlanId }: PricingTableProps) {
+export function PricingTable({ plans, comparison, billingEnabled, controlledPreview = false, signedIn, currentPlanId }: PricingTableProps) {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
@@ -96,15 +98,17 @@ export function PricingTable({ plans, comparison, billingEnabled, signedIn, curr
               current={isCurrent}
               recommended={plan.id === "pro" && !isCurrent}
               action={
-                isCurrent
-                  ? { label: "Current plan", disabled: true, variant: "secondary" }
-                  : plan.id === "free"
-                    ? { label: signedIn ? "Go to dashboard" : "Start for free", onClick: () => void choose(plan), variant: "secondary" }
-                    : purchasable
-                      ? { label: signedIn ? `Buy ${plan.name}` : `Get ${plan.name}`, onClick: () => void choose(plan), loading: busy === plan.id || opening, disabled: busy !== null || opening }
-                      : { label: "Not yet available", disabled: true, variant: "secondary" }
+                controlledPreview
+                  ? { label: "Unavailable in preview", disabled: true, variant: "secondary" }
+                  : isCurrent
+                    ? { label: "Current plan", disabled: true, variant: "secondary" }
+                    : plan.id === "free"
+                      ? { label: signedIn ? "Go to dashboard" : "Start for free", onClick: () => void choose(plan), variant: "secondary" }
+                      : purchasable
+                        ? { label: signedIn ? `Buy ${plan.name}` : `Get ${plan.name}`, onClick: () => void choose(plan), loading: busy === plan.id || opening, disabled: busy !== null || opening }
+                        : { label: "Not yet available", disabled: true, variant: "secondary" }
               }
-              footnote={plan.id !== "free" && purchasable ? "Secure checkout via Razorpay. Billed monthly, cancel any time." : plan.id !== "free" ? "Self-serve checkout is not configured on this deployment." : null}
+              footnote={controlledPreview ? "Accounts and payments are intentionally disabled in this controlled public preview." : plan.id !== "free" && purchasable ? "Secure checkout via Razorpay. Billed monthly, cancel any time." : plan.id !== "free" ? "Self-serve checkout is not configured on this deployment." : null}
             />
           );
         })}
